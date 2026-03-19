@@ -131,7 +131,7 @@ class RDTService:
                     return arr
         return fallback
 
-    def _get_norm_stats(self, req_stats):
+    def _get_norm_stats(self):
         ds_stat = self.dataset_stat.get(self.dataset_name, {})
         action_prefix = "absolute" if self.action_target == "absolute" else "delta"
 
@@ -190,26 +190,25 @@ class RDTService:
                 "action_std",
             ]
 
-        req_stats = req_stats or {}
         s_mean = self._pick_stat(
             ds_stat,
             state_mean_keys,
-            np.array(req_stats.get("state_mean", np.zeros(self.state_dim)), dtype=np.float32),
+            np.zeros(self.state_dim, dtype=np.float32),
         )
         s_std = self._pick_stat(
             ds_stat,
             state_std_keys,
-            np.array(req_stats.get("state_std", np.ones(self.state_dim)), dtype=np.float32),
+            np.ones(self.state_dim, dtype=np.float32),
         )
         a_mean = self._pick_stat(
             ds_stat,
             action_mean_keys,
-            np.array(req_stats.get("action_mean", np.zeros(self.state_dim)), dtype=np.float32),
+            np.zeros(self.state_dim, dtype=np.float32),
         )
         a_std = self._pick_stat(
             ds_stat,
             action_std_keys,
-            np.array(req_stats.get("action_std", np.ones(self.state_dim)), dtype=np.float32),
+            np.ones(self.state_dim, dtype=np.float32),
         )
 
         s_std = np.maximum(s_std, 1e-6)
@@ -282,13 +281,12 @@ class RDTService:
         instruction = request_data["instruction"]
         state = np.array(request_data["state"], dtype=np.float32)
         images = request_data["images"]
-        req_stats = request_data.get("norm_stats")
         ctrl_freq = int(request_data.get("ctrl_freq", self.control_frequency))
 
         if state.shape[-1] != self.state_dim:
             raise ValueError(f"state length must be {self.state_dim}, got {state.shape[-1]}")
 
-        s_mean, s_std, a_mean, a_std = self._get_norm_stats(req_stats)
+        s_mean, s_std, a_mean, a_std = self._get_norm_stats()
         state_norm = (state - s_mean) / s_std
         state_norm = state_norm * self.state_mask_np
 
@@ -400,6 +398,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    import debugpy; debugpy.listen(("localhost", 5678)); print("Waiting for debugger attach..."); debugpy.wait_for_client()
     service = RDTService(
         config_path=args.config_path,
         pretrained_model_name_or_path=args.pretrained_model_name_or_path,

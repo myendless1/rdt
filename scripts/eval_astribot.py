@@ -53,23 +53,6 @@ def post_json(url: str, payload: Dict[str, Any], timeout_sec: float) -> Dict[str
     return json.loads(body)
 
 
-def load_norm_stats(path: str, dataset_name: str = "astribot") -> Dict[str, List[float]]:
-    with open(path, "r", encoding="utf-8") as f:
-        obj = json.load(f)
-    if dataset_name in obj:
-        obj = obj[dataset_name]
-    required = ["state_mean", "state_std", "action_mean", "action_std"]
-    for key in required:
-        if key not in obj:
-            raise KeyError(f"Missing key `{key}` in stats file: {path}")
-    return {
-        "state_mean": np.asarray(obj["state_mean"], dtype=np.float32).tolist(),
-        "state_std": np.maximum(np.asarray(obj["state_std"], dtype=np.float32), 1e-6).tolist(),
-        "action_mean": np.asarray(obj["action_mean"], dtype=np.float32).tolist(),
-        "action_std": np.maximum(np.asarray(obj["action_std"], dtype=np.float32), 1e-6).tolist(),
-    }
-
-
 def gripper_joint_to_open(g_joint: float) -> float:
     # SDK: 0=open, 100=close; 模型: 1=open, 0=close
     return float(np.clip(1.0 - (g_joint / 100.0), 0.0, 1.0))
@@ -425,7 +408,6 @@ def parse_args():
     parser.add_argument("--instruction", type=str, default="")
     parser.add_argument("--action_mode", type=str, default="eef_pose", choices=["joint", "eef_pose"])
     parser.add_argument("--action_target", type=str, default="delta", choices=["delta", "absolute"])
-    parser.add_argument("--stats_json", type=str, default="")
     parser.add_argument("--num_steps", type=int, default=200)
     parser.add_argument("--control_hz", type=float, default=8.0)
     parser.add_argument("--ctrl_freq", type=int, default=25, help="发送给服务端的 ctrl_freq")
@@ -442,30 +424,15 @@ def parse_args():
     return parser.parse_args()
 
 
-def get_default_stats_path(action_mode: str, action_target: str) -> str:
-    if action_mode == "eef_pose" and action_target == "delta":
-        return "configs/astribot_stats_eef_pose_delta.json"
-    if action_mode == "joint" and action_target == "delta":
-        return "configs/astribot_stats_joint_delta.json"
-    # absolute 先回退到 delta 统计，用户可显式指定 --stats_json
-    if action_mode == "eef_pose":
-        return "configs/astribot_stats_eef_pose_delta.json"
-    return "configs/astribot_stats_joint_delta.json"
-
-
 def main():
     args = parse_args()
     import debugpy; debugpy.listen(5678); print("Waiting for debugger attach..."); debugpy.wait_for_client()
     active_indices = get_active_indices(args.action_mode)
 
-    stats_path = args.stats_json or get_default_stats_path(args.action_mode, args.action_target)
-    norm_stats = load_norm_stats(stats_path)
-
     print("=== Astribot Online Eval ===")
     print(f"server_url={args.server_url}")
     print(f"action_mode={args.action_mode}")
     print(f"action_target={args.action_target}")
-    print(f"stats_json={stats_path}")
     print(f"execute={args.execute}")
 
     bot = Astribot(freq=250.0, high_control_rights=args.high_control_rights)
@@ -513,7 +480,6 @@ def main():
                 "cam_right_wrist": [encode_image_b64(img) for img in images["cam_right_wrist"]],
                 "cam_left_wrist": [encode_image_b64(img) for img in images["cam_left_wrist"]],
             },
-            "norm_stats": norm_stats,
             "action_target": args.action_target,
             "ctrl_freq": int(args.ctrl_freq),
         }

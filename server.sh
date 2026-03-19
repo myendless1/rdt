@@ -13,17 +13,15 @@ export http_proxy=http://localhost:7890
 export https_proxy=http://localhost:7890 
 export no_proxy=localhost,127.0.0.1
 
-HOST=${HOST:-127.0.0.1}
+HOST=${HOST:-0.0.0.0}
 PORT=${PORT:-18081}
 DATASET_PATH=${DATASET_PATH:-/media/damoxing/datasets/myendless/pick_up_board_black_bg}
-PRETRAINED_MODEL=${PRETRAINED_MODEL:-checkpoints/rdt-1b-finetune-astribot-eef/checkpoint-1500}
+PRETRAINED_MODEL=${PRETRAINED_MODEL:-checkpoints/rdt-1b-finetune-astribot-eef/checkpoint-5000}
 TEXT_ENCODER_NAME=${TEXT_ENCODER_NAME:-google/t5-v1_1-xxl}
 VISION_ENCODER_NAME=${VISION_ENCODER_NAME:-google/siglip-so400m-patch14-384}
 NUM_SAMPLES=${NUM_SAMPLES:-8}
 DATASET_STAT_PATH=${DATASET_STAT_PATH:-configs/astribot_stats_eef_pose_delta.json}
 
-SERVER_LOG=logs/rdt_server_eef_pose.log
-CLIENT_JSON=logs/rdt_eval_eef_pose.json
 
 python scripts/rdt_http_server.py \
   --host "$HOST" \
@@ -37,29 +35,4 @@ python scripts/rdt_http_server.py \
   --action_mode eef_pose \
   --control_frequency 25 \
   --device cuda \
-  --dtype bf16 > "$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
-
-cleanup() {
-  if kill -0 "$SERVER_PID" >/dev/null 2>&1; then
-    kill "$SERVER_PID" >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup EXIT
-
-for _ in $(seq 1 60); do
-  if curl -s "http://$HOST:$PORT/health" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-
-python scripts/rdt_mock_client.py \
-  --server_url "http://$HOST:$PORT" \
-  --dataset_path "$DATASET_PATH" \
-  --action_mode eef_pose \
-  --num_samples "$NUM_SAMPLES" \
-  --timeout_sec 120 \
-  --output_json "$CLIENT_JSON"
-
-cat "$CLIENT_JSON"
+  --dtype bf16
