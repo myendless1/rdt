@@ -44,6 +44,58 @@ if is_wandb_available():
     import wandb
 
 
+def _patch_deepspeed_backward_counter_for_torch_compat():
+    """Work around a Torch/DeepSpeed API mismatch in ZeRO grad hooks.
+
+    Some Torch builds can raise AttributeError inside
+    torch.autograd.graph._get_grad_fn_or_grad_acc for specific parameters,
+    which crashes DeepSpeed's count_used_parameters_in_backward.
+    """
+    try:
+        import deepspeed.runtime.utils as ds_utils
+        import deepspeed.runtime.zero.stage_1_and_2 as ds_zero_stage_1_2
+    except Exception:
+        return
+
+    original_fn = ds_utils.count_used_parameters_in_backward
+    if getattr(original_fn, "_rdt_safe_patch", False):
+        return
+
+    def safe_count_used_parameters_in_backward(parameters):
+        try:
+            return original_fn(parameters)
+        except AttributeError:
+            from torch.autograd.graph import _get_grad_fn_or_grad_acc
+
+            seen_nodes = set()
+            for param in parameters:
+                if not isinstance(param, torch.Tensor) or not param.requires_grad:
+                    continue
+
+                try:
+                    grad_fn = _get_grad_fn_or_grad_acc(param)
+                except Exception:
+                    continue
+
+                if grad_fn is None or grad_fn in seen_nodes:
+                    continue
+
+                seen_nodes.add(grad_fn)
+
+            if not seen_nodes:
+                return 0
+
+            try:
+                return int(sum(map(torch._C._will_engine_execute_node, seen_nodes)))
+            except Exception:
+                return 0
+
+    safe_count_used_parameters_in_backward._rdt_safe_patch = True
+    ds_utils.count_used_parameters_in_backward = safe_count_used_parameters_in_backward
+    ds_zero_stage_1_2.count_used_parameters_in_backward = safe_count_used_parameters_in_backward
+    logging.getLogger(__name__).info("Applied DeepSpeed backward-counter compatibility patch.")
+
+
 def save_model_card(repo_id: str, base_model=str, repo_folder=None):
     yaml = f"""
 ---
@@ -73,9 +125,42 @@ This is a RDT model derived from {base_model}. The weights were trained using [R
 
 
 def train(args, logger):
+    # import debugpy; debugpy.listen(5678); print("Waiting for debugger to attach..."); debugpy.wait_for_client()
+    _patch_deepspeed_backward_counter_for_torch_compat()
+
     # Read the config
     with open(args.config_path, "r") as fp:
         config = yaml.safe_load(fp)
+
+    alias_to_view = {
+        "head": "head",
+        "cam_high": "head",
+        "high": "head",
+        "right": "right",
+        "cam_right_wrist": "right",
+        "right_wrist": "right",
+        "left": "left",
+        "cam_left_wrist": "left",
+        "left_wrist": "left",
+    }
+    raw_views = [v.strip() for v in args.camera_views.split(",") if v.strip()]
+    if len(raw_views) == 0:
+        raise ValueError("--camera_views must contain at least one view")
+    available_views = ["head", "right", "left"][: int(config["common"]["num_cameras"])]
+    selected_camera_views = []
+    for view in raw_views:
+        key = view.lower()
+        if key not in alias_to_view:
+            raise ValueError(
+                f"Unsupported camera view '{view}'. Supported: head/right/left and cam_* aliases."
+            )
+        canonical = alias_to_view[key]
+        if canonical not in available_views:
+            raise ValueError(
+                f"Camera view '{canonical}' is not available with num_cameras={config['common']['num_cameras']}"
+            )
+        if canonical not in selected_camera_views:
+            selected_camera_views.append(canonical)
 
     logging_dir = Path(args.output_dir, args.logging_dir)
 
@@ -86,14 +171,14 @@ def train(args, logger):
         ) if args.deepspeed is not None else None,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
+        log_with=None,
         project_dir=logging_dir,
         project_config=accelerator_project_config,
     )
+    if not is_wandb_available():
+        raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
 
-    if args.report_to == "wandb":
-        if not is_wandb_available():
-            raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
+    wandb_run = None
 
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
@@ -152,7 +237,7 @@ def train(args, logger):
         logger.info("Constructing model from provided config.")
         # Calculate the image condition length
         img_cond_len = (config["common"]["img_history_size"] 
-                        * config["common"]["num_cameras"] 
+                        * config["common"]["num_cameras"]
                         * vision_encoder.num_patches)
         rdt = RDTRunner(
             action_dim=config["common"]["state_dim"],
@@ -167,7 +252,7 @@ def train(args, logger):
                 # No initial pos embed in the last grid size
                 # since we've already done in ViT
                 ("image", (config["common"]["img_history_size"], 
-                    config["common"]["num_cameras"], 
+                    config["common"]["num_cameras"],
                     -vision_encoder.num_patches)),  
             ],
             lang_pos_embed_config=[
@@ -243,12 +328,15 @@ def train(args, logger):
         image_processor=image_processor,
         num_cameras=config["common"]["num_cameras"],
         img_history_size=config["common"]["img_history_size"],
+        camera_views=selected_camera_views,
         dataset_type=args.dataset_type,
         image_aug=args.image_aug,
         cond_mask_prob=args.cond_mask_prob,
         cam_ext_mask_prob=args.cam_ext_mask_prob,
         state_noise_snr=args.state_noise_snr,
         use_hdf5=args.load_from_hdf5,
+        hdf5_action_mode=args.hdf5_action_mode,
+        hdf5_action_target=args.hdf5_action_target,
         use_precomp_lang_embed=args.precomp_lang_embed,
     )
     sample_dataset = VLAConsumerDataset(
@@ -257,12 +345,15 @@ def train(args, logger):
         image_processor=image_processor,
         num_cameras=config["common"]["num_cameras"],
         img_history_size=config["common"]["img_history_size"],
+        camera_views=selected_camera_views,
         dataset_type=args.dataset_type,
         image_aug=False,
         cond_mask_prob=0,
         cam_ext_mask_prob=-1,
         state_noise_snr=None,
         use_hdf5=args.load_from_hdf5,
+        hdf5_action_mode=args.hdf5_action_mode,
+        hdf5_action_target=args.hdf5_action_target,
         use_precomp_lang_embed=args.precomp_lang_embed,
     )                              
     
@@ -323,10 +414,13 @@ def train(args, logger):
     # Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
-    # We need to initialize the trackers we use, and also store our configuration.
-    # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
-        accelerator.init_trackers("roboticDiffusionTransformer", config=vars(args))
+        wandb_run = wandb.init(
+            project="roboticDiffusionTransformer",
+            name=args.log_name,
+            config=vars(args),
+            dir=args.output_dir,
+        )
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -469,13 +563,15 @@ def train(args, logger):
                         logger,
                     )
                     logger.info(sample_loss_for_log)
-                    accelerator.log(sample_loss_for_log, step=global_step)
+                    if accelerator.is_main_process and wandb_run is not None:
+                        wandb.log(sample_loss_for_log, step=global_step)
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
             logs.update(loss_for_log)
             # logger.info(logs)
-            accelerator.log(logs, step=global_step)
+            if accelerator.is_main_process and wandb_run is not None:
+                wandb.log(logs, step=global_step)
 
             if global_step >= args.max_train_steps:
                 break
@@ -504,4 +600,6 @@ def train(args, logger):
                 # ignore_patterns=["step_*", "epoch_*"],
             )
             
+    if accelerator.is_main_process and wandb_run is not None:
+        wandb.finish()
     accelerator.end_training()

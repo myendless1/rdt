@@ -1,6 +1,5 @@
 import os
 import fnmatch
-import json
 
 import h5py
 import yaml
@@ -15,17 +14,17 @@ class HDF5VLADataset:
     This class is used to sample episodes from the embododiment dataset
     stored in HDF5.
     """
-    def __init__(self) -> None:
-        # [Modify] The path to the HDF5 dataset directory
-        # Each HDF5 file contains one episode
-        HDF5_DIR = "data/datasets/agilex/rdt_data/"
-        self.DATASET_NAME = "agilex"
+    def __init__(self, dataset_path=None, action_mode="delta_eef_pose", action_target="delta") -> None:
+        # random-rack2: each HDF5 file is one episode
+        HDF5_DIR = dataset_path if dataset_path is not None else "/media/damoxing/datasets/myendless/random-rack2"
+        self.DATASET_NAME = "astribot"
         
         self.file_paths = []
         for root, _, files in os.walk(HDF5_DIR):
             for filename in fnmatch.filter(files, '*.hdf5'):
                 file_path = os.path.join(root, filename)
                 self.file_paths.append(file_path)
+        self.file_paths.sort()
                 
         # Load the config
         with open('configs/base.yaml', 'r') as file:
@@ -33,6 +32,49 @@ class HDF5VLADataset:
         self.CHUNK_SIZE = config['common']['action_chunk_size']
         self.IMG_HISORY_SIZE = config['common']['img_history_size']
         self.STATE_DIM = config['common']['state_dim']
+        self.action_mode = action_mode
+        if self.action_mode not in {"delta_joint", "delta_eef_pose"}:
+            raise ValueError(
+                f"Unsupported action_mode={self.action_mode}. "
+                "Choose from {'delta_joint', 'delta_eef_pose'}."
+            )
+        self.action_target = action_target
+        if self.action_target not in {"delta", "absolute"}:
+            raise ValueError(
+                f"Unsupported action_target={self.action_target}. "
+                "Choose from {'delta', 'absolute'}."
+            )
+
+        # Slot definitions from configs/state_vec.py.
+        self.LEFT_JOINT_SLOT_INDICES = [
+            STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(7)
+        ]
+        self.RIGHT_JOINT_SLOT_INDICES = [
+            STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(7)
+        ]
+        self.LEFT_EEF_POS_SLOT_INDICES = [
+            STATE_VEC_IDX_MAPPING["left_eef_pos_x"],
+            STATE_VEC_IDX_MAPPING["left_eef_pos_y"],
+            STATE_VEC_IDX_MAPPING["left_eef_pos_z"],
+        ]
+        self.RIGHT_EEF_POS_SLOT_INDICES = [
+            STATE_VEC_IDX_MAPPING["right_eef_pos_x"],
+            STATE_VEC_IDX_MAPPING["right_eef_pos_y"],
+            STATE_VEC_IDX_MAPPING["right_eef_pos_z"],
+        ]
+        self.LEFT_EEF_ANGLE_SLOT_INDICES = [
+            STATE_VEC_IDX_MAPPING[f"left_eef_angle_{i}"] for i in range(6)
+        ]
+        self.RIGHT_EEF_ANGLE_SLOT_INDICES = [
+            STATE_VEC_IDX_MAPPING[f"right_eef_angle_{i}"] for i in range(6)
+        ]
+        self.LEFT_GRIPPER_OPEN_SLOT_IDX = STATE_VEC_IDX_MAPPING["left_gripper_open"]
+        self.RIGHT_GRIPPER_OPEN_SLOT_IDX = STATE_VEC_IDX_MAPPING["right_gripper_open"]
+        self.ASTRIBOT_DATA_JOINT_LEFT_ARM_SLICE = slice(0, 7)
+        self.ASTRIBOT_DATA_JOINT_RIGHT_ARM_SLICE = slice(7, 14)
+
+        if len(self.file_paths) == 0:
+            raise RuntimeError(f"No .hdf5 file found under {HDF5_DIR}")
     
         # Get each episode's len
         episode_lens = []
@@ -40,7 +82,171 @@ class HDF5VLADataset:
             valid, res = self.parse_hdf5_file_state_only(file_path)
             _len = res['state'].shape[0] if valid else 0
             episode_lens.append(_len)
-        self.episode_sample_weights = np.array(episode_lens) / np.sum(episode_lens)
+        episode_lens = np.array(episode_lens, dtype=np.float64)
+        if episode_lens.sum() <= 0:
+            self.episode_sample_weights = np.ones_like(episode_lens) / len(episode_lens)
+        else:
+            self.episode_sample_weights = episode_lens / episode_lens.sum()
+
+    def _resolve_arm_slot_indices(self, arm_dim):
+        if self.action_mode == "delta_joint":
+            if arm_dim > len(self.LEFT_JOINT_SLOT_INDICES):
+                raise ValueError(f"Joint arm_dim={arm_dim} exceeds configured slots")
+            return (
+                self.LEFT_JOINT_SLOT_INDICES[:arm_dim],
+                self.RIGHT_JOINT_SLOT_INDICES[:arm_dim],
+            )
+
+        # For eef mode, map position first then orientation terms.
+        if arm_dim < 3:
+            raise ValueError(f"EEF arm_dim={arm_dim} is too small")
+        angle_dim = arm_dim - 3
+        if angle_dim > len(self.LEFT_EEF_ANGLE_SLOT_INDICES):
+            raise ValueError(
+                f"EEF arm_dim={arm_dim} requires {angle_dim} angle slots, but only "
+                f"{len(self.LEFT_EEF_ANGLE_SLOT_INDICES)} are defined"
+            )
+        left_indices = self.LEFT_EEF_POS_SLOT_INDICES + self.LEFT_EEF_ANGLE_SLOT_INDICES[:angle_dim]
+        right_indices = self.RIGHT_EEF_POS_SLOT_INDICES + self.RIGHT_EEF_ANGLE_SLOT_INDICES[:angle_dim]
+        return left_indices, right_indices
+
+    def _fill_bimanual_state(self, left_arm, left_gripper, right_arm, right_gripper):
+        """Fill only bimanual arm+gripper dimensions, keep others as zero."""
+        if left_arm.shape[-1] != right_arm.shape[-1]:
+            raise ValueError(
+                f"Left/right arm dims mismatch: {left_arm.shape[-1]} vs {right_arm.shape[-1]}"
+            )
+        left_indices, right_indices = self._resolve_arm_slot_indices(left_arm.shape[-1])
+        uni_vec = np.zeros(left_arm.shape[:-1] + (self.STATE_DIM,), dtype=np.float32)
+        uni_vec[..., left_indices] = left_arm
+        uni_vec[..., right_indices] = right_arm
+        uni_vec[..., self.LEFT_GRIPPER_OPEN_SLOT_IDX] = left_gripper[..., 0]
+        uni_vec[..., self.RIGHT_GRIPPER_OPEN_SLOT_IDX] = right_gripper[..., 0]
+        return uni_vec
+
+    def _build_state_indicator(self, arm_dim):
+        left_indices, right_indices = self._resolve_arm_slot_indices(arm_dim)
+        indicator = np.zeros((self.STATE_DIM,), dtype=np.float32)
+        indicator[left_indices] = 1.0
+        indicator[right_indices] = 1.0
+        indicator[self.LEFT_GRIPPER_OPEN_SLOT_IDX] = 1.0
+        indicator[self.RIGHT_GRIPPER_OPEN_SLOT_IDX] = 1.0
+        return indicator
+
+    @staticmethod
+    def _normalize_gripper(state_gripper, cmd_gripper):
+        """Normalize gripper widths to [0, 1] as recommended by RDT README."""
+        g_min = 0
+        g_max = 100
+        if g_max - g_min < 1e-8:
+            state_norm = np.zeros_like(state_gripper, dtype=np.float32)
+            cmd_norm = np.zeros_like(cmd_gripper, dtype=np.float32)
+        else:
+            state_norm = (state_gripper - g_min) / (g_max - g_min)
+            cmd_norm = (cmd_gripper - g_min) / (g_max - g_min)
+        state_norm = np.clip(state_norm, 0.0, 1.0)
+        cmd_norm = np.clip(cmd_norm, 0.0, 1.0)
+
+        # Astribot source semantics: 1=closed, 0=open after min-max scaling.
+        # RDT uses gripper_open where 1=open, 0=closed, so we invert here.
+        return (1.0 - state_norm).astype(np.float32), (1.0 - cmd_norm).astype(np.float32)
+
+    @staticmethod
+    def _to_delta_action(command_vec, state_vec):
+        """Convert command pose sequence to delta action sequence."""
+        delta = np.zeros_like(command_vec, dtype=np.float32)
+        if command_vec.shape[0] == 0:
+            return delta
+        # First step: delta from current state to current command.
+        delta[0] = command_vec[0] - state_vec[0]
+        # Later steps: temporal finite difference in command space.
+        if command_vec.shape[0] > 1:
+            delta[1:] = command_vec[1:] - command_vec[:-1]
+        return delta
+
+    def _build_action_target(self, command_full, state_full):
+        if self.action_target == "absolute":
+            return command_full.astype(np.float32)
+        return self._to_delta_action(command_full, state_full)
+
+    def _load_bimanual_from_hdf5(self, file_obj):
+        """Load bimanual trajectories from HDF5 in the requested action mode."""
+        if self.action_mode == "delta_joint":
+            left_arm = file_obj['joints_dict']['joints_position_state'][:, self.ASTRIBOT_DATA_JOINT_LEFT_ARM_SLICE].astype(np.float32)
+            right_arm = file_obj['joints_dict']['joints_position_state'][:, self.ASTRIBOT_DATA_JOINT_RIGHT_ARM_SLICE].astype(np.float32)
+            cmd_left_arm = file_obj['joints_dict']['joints_position_command'][:, self.ASTRIBOT_DATA_JOINT_LEFT_ARM_SLICE].astype(np.float32)
+            cmd_right_arm = file_obj['joints_dict']['joints_position_command'][:, self.ASTRIBOT_DATA_JOINT_RIGHT_ARM_SLICE].astype(np.float32)
+        else:
+            left_arm = file_obj['poses_dict']['astribot_arm_left'][:].astype(np.float32)
+            right_arm = file_obj['poses_dict']['astribot_arm_right'][:].astype(np.float32)
+            cmd_left_arm = file_obj['command_poses_dict']['astribot_arm_left'][:].astype(np.float32)
+            cmd_right_arm = file_obj['command_poses_dict']['astribot_arm_right'][:].astype(np.float32)
+
+        left_gripper = file_obj['poses_dict']['astribot_gripper_left'][:].astype(np.float32)
+        right_gripper = file_obj['poses_dict']['astribot_gripper_right'][:].astype(np.float32)
+        cmd_left_gripper = file_obj['command_poses_dict']['astribot_gripper_left'][:].astype(np.float32)
+        cmd_right_gripper = file_obj['command_poses_dict']['astribot_gripper_right'][:].astype(np.float32)
+
+        left_gripper, cmd_left_gripper = self._normalize_gripper(left_gripper, cmd_left_gripper)
+        right_gripper, cmd_right_gripper = self._normalize_gripper(right_gripper, cmd_right_gripper)
+
+        num_steps = min(
+            left_arm.shape[0], right_arm.shape[0], left_gripper.shape[0], right_gripper.shape[0],
+            cmd_left_arm.shape[0], cmd_right_arm.shape[0], cmd_left_gripper.shape[0], cmd_right_gripper.shape[0]
+        )
+        return {
+            "left_arm": left_arm,
+            "right_arm": right_arm,
+            "left_gripper": left_gripper,
+            "right_gripper": right_gripper,
+            "cmd_left_arm": cmd_left_arm,
+            "cmd_right_arm": cmd_right_arm,
+            "cmd_left_gripper": cmd_left_gripper,
+            "cmd_right_gripper": cmd_right_gripper,
+            "num_steps": num_steps,
+        }
+
+    @staticmethod
+    def _decode_packed_jpeg_frame(rgb_bytes, rgb_sizes, frame_id):
+        end = int(np.sum(rgb_sizes[:frame_id + 1]))
+        start = end - int(rgb_sizes[frame_id])
+        frame = rgb_bytes[start:end]
+        return cv2.imdecode(frame, cv2.IMREAD_COLOR)
+
+    def _parse_img(self, file_obj, cam_key, step_id):
+        if 'images_dict' not in file_obj or cam_key not in file_obj['images_dict']:
+            return np.zeros((self.IMG_HISORY_SIZE, 0, 0, 0), dtype=np.uint8), np.zeros(self.IMG_HISORY_SIZE, dtype=bool)
+
+        rgb_bytes = file_obj['images_dict'][cam_key]['rgb'][:]
+        rgb_sizes = file_obj['images_dict'][cam_key]['rgb_size'][:].astype(np.int64)
+        num_steps = len(rgb_sizes)
+        step_id = min(step_id, num_steps - 1)
+
+        start = max(step_id - self.IMG_HISORY_SIZE + 1, 0)
+        frames = []
+        for i in range(start, step_id + 1):
+            img = self._decode_packed_jpeg_frame(rgb_bytes, rgb_sizes, i)
+            if img is None:
+                # If a frame cannot be decoded, use a black placeholder with the same size as the last valid frame.
+                if len(frames) > 0:
+                    img = np.zeros_like(frames[-1])
+                else:
+                    img = np.zeros((256, 256, 3), dtype=np.uint8)
+            frames.append(img)
+
+        imgs = np.stack(frames, axis=0)
+        valid_len = imgs.shape[0]
+        if valid_len < self.IMG_HISORY_SIZE:
+            imgs = np.concatenate([
+                np.tile(imgs[:1], (self.IMG_HISORY_SIZE - valid_len, 1, 1, 1)),
+                imgs
+            ], axis=0)
+
+        img_mask = np.array(
+            [False] * (self.IMG_HISORY_SIZE - valid_len) + [True] * valid_len,
+            dtype=bool
+        )
+        return imgs, img_mask
     
     def __len__(self):
         return len(self.file_paths)
@@ -113,39 +319,33 @@ class HDF5VLADataset:
                 } or None if the episode is invalid.
         """
         with h5py.File(file_path, 'r') as f:
-            qpos = f['observations']['qpos'][:]
-            num_steps = qpos.shape[0]
+            parsed = self._load_bimanual_from_hdf5(f)
+            left_arm = parsed["left_arm"]
+            right_arm = parsed["right_arm"]
+            left_gripper = parsed["left_gripper"]
+            right_gripper = parsed["right_gripper"]
+            cmd_left_arm = parsed["cmd_left_arm"]
+            cmd_right_arm = parsed["cmd_right_arm"]
+            cmd_left_gripper = parsed["cmd_left_gripper"]
+            cmd_right_gripper = parsed["cmd_right_gripper"]
+            num_steps = parsed["num_steps"]
             # [Optional] We drop too-short episode
             if num_steps < 128:
                 return False, None
-            
-            # [Optional] We skip the first few still steps
-            EPS = 1e-2
-            # Get the idx of the first qpos whose delta exceeds the threshold
-            qpos_delta = np.abs(qpos - qpos[0:1])
-            indices = np.where(np.any(qpos_delta > EPS, axis=1))[0]
-            if len(indices) > 0:
-                first_idx = indices[0]
-            else:
-                raise ValueError("Found no qpos that exceeds the threshold.")
+
+            # Skip initial static segment using bimanual arm state.
+            EPS = 1e-3
+            arm_state = np.concatenate([left_arm[:num_steps], right_arm[:num_steps]], axis=-1)
+            arm_delta = np.abs(arm_state - arm_state[0:1])
+            indices = np.where(np.any(arm_delta > EPS, axis=1))[0]
+            first_idx = int(indices[0]) if len(indices) > 0 else 0
             
             # We randomly sample a timestep
-            step_id = np.random.randint(first_idx-1, num_steps)
+            min_step = max(first_idx - 1, 0)
+            step_id = np.random.randint(min_step, num_steps)
             
-            # Load the instruction
-            dir_path = os.path.dirname(file_path)
-            with open(os.path.join(dir_path, 'expanded_instruction_gpt-4-turbo.json'), 'r') as f_instr:
-                instruction_dict = json.load(f_instr)
-            # We have 1/3 prob to use original instruction,
-            # 1/3 to use simplified instruction,
-            # and 1/3 to use expanded instruction.
-            instruction_type = np.random.choice([
-                'instruction', 'simplified_instruction', 'expanded_instruction'])
-            instruction = instruction_dict[instruction_type]
-            if isinstance(instruction, list):
-                instruction = np.random.choice(instruction)
-            # You can also use precomputed language embeddings (recommended)
-            # instruction = "path/to/lang_embed.pt"
+            # random-rack2 does not provide per-episode language, use a stable instruction.
+            instruction = "Use right arm to perform rack manipulation while keeping left-arm joints fixed."
             
             # Assemble the meta
             meta = {
@@ -154,78 +354,41 @@ class HDF5VLADataset:
                 "step_id": step_id,
                 "instruction": instruction
             }
-            
-            # Rescale gripper to [0, 1]
-            qpos = qpos / np.array(
-               [[1, 1, 1, 1, 1, 1, 4.7908, 1, 1, 1, 1, 1, 1, 4.7888]] 
-            )
-            target_qpos = f['action'][step_id:step_id+self.CHUNK_SIZE] / np.array(
-               [[1, 1, 1, 1, 1, 1, 11.8997, 1, 1, 1, 1, 1, 1, 13.9231]] 
-            )
-            
+
             # Parse the state and action
-            state = qpos[step_id:step_id+1]
-            state_std = np.std(qpos, axis=0)
-            state_mean = np.mean(qpos, axis=0)
-            state_norm = np.sqrt(np.mean(qpos**2, axis=0))
-            actions = target_qpos
+            state = self._fill_bimanual_state(
+                left_arm[step_id:step_id+1],
+                left_gripper[step_id:step_id+1],
+                right_arm[step_id:step_id+1],
+                right_gripper[step_id:step_id+1],
+            )
+            full_state = self._fill_bimanual_state(
+                left_arm[:num_steps], left_gripper[:num_steps], right_arm[:num_steps], right_gripper[:num_steps]
+            )
+            state_std = np.std(full_state, axis=0)
+            state_mean = np.mean(full_state, axis=0)
+            state_norm = np.sqrt(np.mean(full_state**2, axis=0))
+
+            command_full = self._fill_bimanual_state(
+                cmd_left_arm[:num_steps], cmd_left_gripper[:num_steps], cmd_right_arm[:num_steps], cmd_right_gripper[:num_steps]
+            )
+            action_full = self._build_action_target(command_full, full_state)
+            action_mean = np.mean(action_full, axis=0)
+            action_std = np.std(action_full, axis=0)
+            actions = action_full[step_id:step_id+self.CHUNK_SIZE]
             if actions.shape[0] < self.CHUNK_SIZE:
                 # Pad the actions using the last action
                 actions = np.concatenate([
                     actions,
                     np.tile(actions[-1:], (self.CHUNK_SIZE-actions.shape[0], 1))
                 ], axis=0)
-            
-            # Fill the state/action into the unified vector
-            def fill_in_state(values):
-                # Target indices corresponding to your state space
-                # In this example: 6 joints + 1 gripper for each arm
-                UNI_STATE_INDICES = [
-                    STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(6)
-                ] + [
-                    STATE_VEC_IDX_MAPPING["left_gripper_open"]
-                ] + [
-                    STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(6)
-                ] + [
-                    STATE_VEC_IDX_MAPPING["right_gripper_open"]
-                ]
-                uni_vec = np.zeros(values.shape[:-1] + (self.STATE_DIM,))
-                uni_vec[..., UNI_STATE_INDICES] = values
-                return uni_vec
-            state = fill_in_state(state)
-            state_indicator = fill_in_state(np.ones_like(state_std))
-            state_std = fill_in_state(state_std)
-            state_mean = fill_in_state(state_mean)
-            state_norm = fill_in_state(state_norm)
-            # If action's format is different from state's,
-            # you may implement fill_in_action()
-            actions = fill_in_state(actions)
-            
-            # Parse the images
-            def parse_img(key):
-                imgs = []
-                for i in range(max(step_id-self.IMG_HISORY_SIZE+1, 0), step_id+1):
-                    img = f['observations']['images'][key][i]
-                    imgs.append(cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR))
-                imgs = np.stack(imgs)
-                if imgs.shape[0] < self.IMG_HISORY_SIZE:
-                    # Pad the images using the first image
-                    imgs = np.concatenate([
-                        np.tile(imgs[:1], (self.IMG_HISORY_SIZE-imgs.shape[0], 1, 1, 1)),
-                        imgs
-                    ], axis=0)
-                return imgs
-            # `cam_high` is the external camera image
-            cam_high = parse_img('cam_high')
-            # For step_id = first_idx - 1, the valid_len should be one
-            valid_len = min(step_id - (first_idx - 1) + 1, self.IMG_HISORY_SIZE)
-            cam_high_mask = np.array(
-                [False] * (self.IMG_HISORY_SIZE - valid_len) + [True] * valid_len
-            )
-            cam_left_wrist = parse_img('cam_left_wrist')
-            cam_left_wrist_mask = cam_high_mask.copy()
-            cam_right_wrist = parse_img('cam_right_wrist')
-            cam_right_wrist_mask = cam_high_mask.copy()
+
+            state_indicator = self._build_state_indicator(left_arm.shape[-1])
+
+            # Parse images from packed JPEG streams.
+            cam_high, cam_high_mask = self._parse_img(f, 'head', step_id)
+            cam_left_wrist, cam_left_wrist_mask = self._parse_img(f, 'left', step_id)
+            cam_right_wrist, cam_right_wrist_mask = self._parse_img(f, 'right', step_id)
             
             # Return the resulting sample
             # For unavailable images, return zero-shape arrays, i.e., (IMG_HISORY_SIZE, 0, 0, 0)
@@ -237,6 +400,8 @@ class HDF5VLADataset:
                 "state_std": state_std,
                 "state_mean": state_mean,
                 "state_norm": state_norm,
+                "action_mean": action_mean,
+                "action_std": action_std,
                 "actions": actions,
                 "state_indicator": state_indicator,
                 "cam_high": cam_high,
@@ -263,52 +428,41 @@ class HDF5VLADataset:
                 } or None if the episode is invalid.
         """
         with h5py.File(file_path, 'r') as f:
-            qpos = f['observations']['qpos'][:]
-            num_steps = qpos.shape[0]
+            parsed = self._load_bimanual_from_hdf5(f)
+            left_arm = parsed["left_arm"]
+            right_arm = parsed["right_arm"]
+            left_gripper = parsed["left_gripper"]
+            right_gripper = parsed["right_gripper"]
+            cmd_left_arm = parsed["cmd_left_arm"]
+            cmd_right_arm = parsed["cmd_right_arm"]
+            cmd_left_gripper = parsed["cmd_left_gripper"]
+            cmd_right_gripper = parsed["cmd_right_gripper"]
+            num_steps = parsed["num_steps"]
             # [Optional] We drop too-short episode
             if num_steps < 128:
                 return False, None
-            
-            # [Optional] We skip the first few still steps
-            EPS = 1e-2
-            # Get the idx of the first qpos whose delta exceeds the threshold
-            qpos_delta = np.abs(qpos - qpos[0:1])
-            indices = np.where(np.any(qpos_delta > EPS, axis=1))[0]
-            if len(indices) > 0:
-                first_idx = indices[0]
-            else:
-                raise ValueError("Found no qpos that exceeds the threshold.")
-            
-            # Rescale gripper to [0, 1]
-            qpos = qpos / np.array(
-               [[1, 1, 1, 1, 1, 1, 4.7908, 1, 1, 1, 1, 1, 1, 4.7888]] 
-            )
-            target_qpos = f['action'][:] / np.array(
-               [[1, 1, 1, 1, 1, 1, 11.8997, 1, 1, 1, 1, 1, 1, 13.9231]] 
-            )
-            
+
+            EPS = 1e-3
+            arm_state = np.concatenate([left_arm[:num_steps], right_arm[:num_steps]], axis=-1)
+            arm_delta = np.abs(arm_state - arm_state[0:1])
+            indices = np.where(np.any(arm_delta > EPS, axis=1))[0]
+            first_idx = int(indices[0]) if len(indices) > 0 else 0
+
             # Parse the state and action
-            state = qpos[first_idx-1:]
-            action = target_qpos[first_idx-1:]
-            
-            # Fill the state/action into the unified vector
-            def fill_in_state(values):
-                # Target indices corresponding to your state space
-                # In this example: 6 joints + 1 gripper for each arm
-                UNI_STATE_INDICES = [
-                    STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(6)
-                ] + [
-                    STATE_VEC_IDX_MAPPING["left_gripper_open"]
-                ] + [
-                    STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(6)
-                ] + [
-                    STATE_VEC_IDX_MAPPING["right_gripper_open"]
-                ]
-                uni_vec = np.zeros(values.shape[:-1] + (self.STATE_DIM,))
-                uni_vec[..., UNI_STATE_INDICES] = values
-                return uni_vec
-            state = fill_in_state(state)
-            action = fill_in_state(action)
+            start = max(first_idx - 1, 0)
+            state = self._fill_bimanual_state(
+                left_arm[start:num_steps],
+                left_gripper[start:num_steps],
+                right_arm[start:num_steps],
+                right_gripper[start:num_steps],
+            )
+            command = self._fill_bimanual_state(
+                cmd_left_arm[start:num_steps],
+                cmd_left_gripper[start:num_steps],
+                cmd_right_arm[start:num_steps],
+                cmd_right_gripper[start:num_steps],
+            )
+            action = self._build_action_target(command, state)
             
             # Return the resulting sample
             return True, {

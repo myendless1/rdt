@@ -172,6 +172,7 @@ outs/
 
 # Checkpoints
 checkpoints/
+checkpoint/
 
 # VSC
 .vscode/

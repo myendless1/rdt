@@ -7,6 +7,7 @@ export NCCL_NVLS_ENABLE=0
 export TEXT_ENCODER_NAME="google/t5-v1_1-xxl"
 export VISION_ENCODER_NAME="google/siglip-so400m-patch14-384"
 export OUTPUT_DIR="./checkpoints/rdt-finetune-1b-sim"
+export CHECKPOINTS_TOTAL_LIMIT=${CHECKPOINTS_TOTAL_LIMIT:-40}
 export CFLAGS="-I/usr/include"
 export LDFLAGS="-L/usr/lib/x86_64-linux-gnu"
 export CUTLASS_PATH="/data/lingxuan/cutlass"
@@ -35,7 +36,7 @@ accelerate launch main.py \
     --max_train_steps=400000 \
     --checkpointing_period=10000 \
     --sample_period=500 \
-    --checkpoints_total_limit=40 \
+    --checkpoints_total_limit="$CHECKPOINTS_TOTAL_LIMIT" \
     --lr_scheduler="constant" \
     --learning_rate=1e-4 \
     --mixed_precision="bf16" \

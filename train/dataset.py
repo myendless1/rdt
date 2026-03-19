@@ -86,6 +86,7 @@ class VLAConsumerDataset(Dataset):
         image_processor,
         num_cameras,
         img_history_size,
+        camera_views=None,
         image_size=None,
         auto_adjust_image_brightness=False,
         image_aug=False,
@@ -94,6 +95,8 @@ class VLAConsumerDataset(Dataset):
         cam_ext_mask_prob=-1.0,
         state_noise_snr=None,
         use_hdf5=False,
+        hdf5_action_mode="delta_eef_pose",
+        hdf5_action_target="delta",
         use_precomp_lang_embed=False
     ):
         super(VLAConsumerDataset, self).__init__()
@@ -118,14 +121,66 @@ class VLAConsumerDataset(Dataset):
         self.tokenizer_max_length = config["tokenizer_max_length"]
         self.image_aspect_ratio = config["image_aspect_ratio"]
         self.state_noise_snr = state_noise_snr
-        self.num_cameras = num_cameras
+        alias_to_view = {
+            "head": "head",
+            "cam_high": "head",
+            "high": "head",
+            "right": "right",
+            "cam_right_wrist": "right",
+            "right_wrist": "right",
+            "left": "left",
+            "cam_left_wrist": "left",
+            "left_wrist": "left",
+        }
+        if camera_views is None:
+            requested_views = ["head", "right", "left"]
+        elif isinstance(camera_views, str):
+            requested_views = [v.strip() for v in camera_views.split(",") if v.strip()]
+        else:
+            requested_views = [str(v).strip() for v in camera_views if str(v).strip()]
+        if len(requested_views) == 0:
+            raise ValueError("camera_views must contain at least one view")
+
+        parsed_views = []
+        for view in requested_views:
+            key = view.lower()
+            if key not in alias_to_view:
+                raise ValueError(
+                    f"Unsupported camera view '{view}'. Supported: head/right/left and cam_* aliases."
+                )
+            canonical = alias_to_view[key]
+            if canonical not in parsed_views:
+                parsed_views.append(canonical)
+
+        self.num_cameras = int(num_cameras)
+        if self.num_cameras < 1 or self.num_cameras > 3:
+            raise ValueError("num_cameras must be in [1, 3]")
+        self.camera_slot_order = ["head", "right", "left"][:self.num_cameras]
+
+        for view in parsed_views:
+            if view not in self.camera_slot_order:
+                raise ValueError(
+                    f"Camera view '{view}' is not available with num_cameras={self.num_cameras}"
+                )
+        self.enabled_camera_views = set(parsed_views)
+        if len(self.enabled_camera_views) == 0:
+            raise ValueError(
+                "At least one selected camera view must be available under current num_cameras"
+            )
+
+        self._camera_slot_to_pair_idx = {"head": 0, "right": 1, "left": 2}
         self.img_history_size = img_history_size
         self.cond_mask_prob = cond_mask_prob
         self.cam_ext_mask_prob = cam_ext_mask_prob
         self.use_hdf5 = use_hdf5
+        self.hdf5_action_mode = hdf5_action_mode
+        self.hdf5_action_target = hdf5_action_target
         self.hdf5_dataset = None
         if use_hdf5:
-            self.hdf5_dataset = HDF5VLADataset()
+            self.hdf5_dataset = HDF5VLADataset(
+                action_mode=hdf5_action_mode,
+                action_target=hdf5_action_target,
+            )
         self.use_precomp_lang_embed = use_precomp_lang_embed
         if use_precomp_lang_embed:
             self.empty_lang_embed = torch.load("data/empty_lang_embed.pt")
@@ -236,6 +291,83 @@ class VLAConsumerDataset(Dataset):
             content, meta = self.last_content, self.last_meta
 
         return (content, *meta)
+
+    def _resolve_norm_stat(self, ds_stat, key_candidates, fallback, target_dim):
+        for key in key_candidates:
+            if key in ds_stat:
+                arr = np.array(ds_stat[key], dtype=np.float32)
+                if arr.shape[-1] == target_dim:
+                    return arr
+        if fallback is not None and fallback.shape[-1] == target_dim:
+            return fallback.astype(np.float32)
+        return None
+
+    def _get_norm_stats(self, ds_name, state_dim, state_mean=None, state_std=None, action_mean=None, action_std=None):
+        ds_stat = self.dataset_stat.get(ds_name, {})
+
+        action_prefix = "absolute" if (self.use_hdf5 and self.hdf5_action_target == "absolute") else "delta"
+
+        if self.use_hdf5 and self.hdf5_action_mode == "delta_joint":
+            state_mean_keys = ["state_mean_delta_joint", "delta_joint_state_mean", "state_mean"]
+            state_std_keys = ["state_std_delta_joint", "delta_joint_state_std", "state_std"]
+            action_mean_keys = [
+                f"action_mean_{action_prefix}_delta_joint",
+                f"{action_prefix}_delta_joint_action_mean",
+                f"action_mean_{action_prefix}",
+                "action_mean_delta_joint",
+                "delta_joint_action_mean",
+                "action_mean",
+            ]
+            action_std_keys = [
+                f"action_std_{action_prefix}_delta_joint",
+                f"{action_prefix}_delta_joint_action_std",
+                f"action_std_{action_prefix}",
+                "action_std_delta_joint",
+                "delta_joint_action_std",
+                "action_std",
+            ]
+        elif self.use_hdf5 and self.hdf5_action_mode == "delta_eef_pose":
+            state_mean_keys = ["state_mean_delta_eef_pose", "delta_eef_pose_state_mean", "state_mean"]
+            state_std_keys = ["state_std_delta_eef_pose", "delta_eef_pose_state_std", "state_std"]
+            action_mean_keys = [
+                f"action_mean_{action_prefix}_delta_eef_pose",
+                f"{action_prefix}_delta_eef_pose_action_mean",
+                f"action_mean_{action_prefix}",
+                "action_mean_delta_eef_pose",
+                "delta_eef_pose_action_mean",
+                "action_mean",
+            ]
+            action_std_keys = [
+                f"action_std_{action_prefix}_delta_eef_pose",
+                f"{action_prefix}_delta_eef_pose_action_std",
+                f"action_std_{action_prefix}",
+                "action_std_delta_eef_pose",
+                "delta_eef_pose_action_std",
+                "action_std",
+            ]
+        else:
+            state_mean_keys = ["state_mean"]
+            state_std_keys = ["state_std"]
+            action_mean_keys = ["action_mean"]
+            action_std_keys = ["action_std"]
+
+        s_mean = self._resolve_norm_stat(ds_stat, state_mean_keys, state_mean, state_dim)
+        s_std = self._resolve_norm_stat(ds_stat, state_std_keys, state_std, state_dim)
+        a_mean = self._resolve_norm_stat(ds_stat, action_mean_keys, action_mean, state_dim)
+        a_std = self._resolve_norm_stat(ds_stat, action_std_keys, action_std, state_dim)
+
+        if s_mean is None:
+            s_mean = np.zeros((state_dim,), dtype=np.float32)
+        if s_std is None:
+            s_std = np.ones((state_dim,), dtype=np.float32)
+        if a_mean is None:
+            a_mean = np.zeros((state_dim,), dtype=np.float32)
+        if a_std is None:
+            a_std = np.ones((state_dim,), dtype=np.float32)
+
+        s_std = np.maximum(s_std, 1e-6)
+        a_std = np.maximum(a_std, 1e-6)
+        return s_mean, s_std, a_mean, a_std
     
     def __getitem__(self, index):
         # For robustness, we will try to load the data until we succeed
@@ -255,11 +387,15 @@ class VLAConsumerDataset(Dataset):
                     ]
                     state_std = res['state_std']
                     state_mean = res['state_mean']
+                    action_std = res.get('action_std')
+                    action_mean = res.get('action_mean')
                     state_norm = res['state_norm']
                 else:
                     (content, _, states, _, actions, _, 
                     state_elem_mask, *image_metas, 
                     state_std, state_mean, state_norm) = self._safe_load(index)
+                    action_std = None
+                    action_mean = None
                 
                 data_dict = {}
                 data_dict['dataset_name'] = content['dataset_name']
@@ -267,13 +403,32 @@ class VLAConsumerDataset(Dataset):
                 data_dict['ctrl_freq'] = self.control_freq[data_dict['dataset_name']] \
                     if random.random() > self.cond_mask_prob else 0
                 
+                s_mean, s_std, a_mean, a_std = self._get_norm_stats(
+                    ds_name=data_dict['dataset_name'],
+                    state_dim=states.shape[-1],
+                    state_mean=state_mean,
+                    state_std=state_std,
+                    action_mean=action_mean,
+                    action_std=action_std,
+                )
+
+                states = (states - s_mean[None]) / s_std[None]
+                actions = (actions - a_mean[None]) / a_std[None]
+                states = states * state_elem_mask[None]
+                actions = actions * state_elem_mask[None]
+
                 if self.state_noise_snr is not None:
+                    # Add noise after normalization so state scales are comparable across dimensions.
                     states += np.random.normal(
-                        0.0, state_std / np.sqrt(10 ** (self.state_noise_snr / 10)), 
-                        states.shape)
-                ds_state_mean = np.array(self.dataset_stat[data_dict['dataset_name']]['state_mean'])
-                ds_state_mean = np.tile(ds_state_mean[None], (states.shape[0], 1))
-                # Randomly mask the states by the mean state
+                        0.0,
+                        1.0 / np.sqrt(10 ** (self.state_noise_snr / 10)),
+                        states.shape,
+                    )
+
+                # ds_state_mean was used for masking. In normalized space, the mean is 0.
+                ds_state_mean = np.zeros_like(states)
+                
+                # Randomly mask the states by the mean state (0)
                 data_dict["states"] = states \
                     if random.random() > self.cond_mask_prob else ds_state_mean
                 data_dict["actions"] = actions
@@ -295,11 +450,16 @@ class VLAConsumerDataset(Dataset):
                 
                 image_metas = list(self.pairwise(image_metas))
                 mask_probs = [self.cond_mask_prob] * self.num_cameras
-                if self.cam_ext_mask_prob >= 0.0:
-                    mask_probs[0] = self.cam_ext_mask_prob
+                if self.cam_ext_mask_prob >= 0.0 and "head" in self.camera_slot_order:
+                    head_idx = self.camera_slot_order.index("head")
+                    mask_probs[head_idx] = self.cam_ext_mask_prob
                 rearranged_images = []
                 for i in range(self.img_history_size):
                     for j in range(self.num_cameras):
+                        slot_view = self.camera_slot_order[j]
+                        if slot_view not in self.enabled_camera_views:
+                            rearranged_images.append((background_image.copy(), False))
+                            continue
                         images, image_mask = image_metas[j]
                         image, valid = images[i], image_mask[i]
                         if valid and (math.prod(image.shape) > 0) and \

@@ -51,6 +51,37 @@ def parse_args(input_args=None):
         )
     )
     parser.add_argument(
+        "--hdf5_action_mode",
+        type=str,
+        default="delta_eef_pose",
+        choices=["delta_joint", "delta_eef_pose"],
+        help=(
+            "Action mode used by HDF5 loader. "
+            "`delta_joint` uses joints_position_state/command; "
+            "`delta_eef_pose` uses poses_dict/command_poses_dict."
+        ),
+    )
+    parser.add_argument(
+        "--hdf5_action_target",
+        type=str,
+        default="delta",
+        choices=["delta", "absolute"],
+        help=(
+            "Training action target for HDF5 loader. "
+            "`delta` uses temporal delta action; `absolute` uses raw command action."
+        ),
+    )
+    parser.add_argument(
+        "--camera_views",
+        type=str,
+        default="head,right,left",
+        help=(
+            "Comma-separated camera views to use as image input. "
+            "Supported names and aliases: head(cam_high), right(cam_right_wrist), left(cam_left_wrist). "
+            "Examples: 'head,right,left' or 'head,right'."
+        ),
+    )
+    parser.add_argument(
         "--train_batch_size", type=int, default=4, help="Batch size (per device) for the training dataloader."
     )
     parser.add_argument(
@@ -280,6 +311,13 @@ def parse_args(input_args=None):
         default="pretrain",
         required=False,
         help="Whether to load the pretrain dataset or finetune dataset."
+    )
+
+    parser.add_argument('--log_name', 
+        type=str, 
+        default="rdt_finetune_astribot",
+        required=False,
+        help="The name of the log in Tensorboard/Wandb."
     )
 
     if input_args is not None:
