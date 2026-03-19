@@ -411,6 +411,12 @@ def parse_args():
     parser.add_argument("--num_steps", type=int, default=200)
     parser.add_argument("--control_hz", type=float, default=8.0)
     parser.add_argument("--ctrl_freq", type=int, default=25, help="发送给服务端的 ctrl_freq")
+    parser.add_argument(
+        "--execute_chunk_size",
+        type=int,
+        default=1,
+        help="每次推理后连续执行的动作数（从预测序列前部截取）",
+    )
     parser.add_argument("--img_history_size", type=int, default=2)
     parser.add_argument("--timeout_sec", type=float, default=30.0)
     parser.add_argument("--warmup_sec", type=float, default=8.0)
@@ -426,13 +432,17 @@ def parse_args():
 
 def main():
     args = parse_args()
-    import debugpy; debugpy.listen(5678); print("Waiting for debugger attach..."); debugpy.wait_for_client()
+    # import debugpy; debugpy.listen(5678); print("Waiting for debugger attach..."); debugpy.wait_for_client()
+    if args.execute_chunk_size <= 0:
+        raise ValueError("--execute_chunk_size must be >= 1")
+
     active_indices = get_active_indices(args.action_mode)
 
     print("=== Astribot Online Eval ===")
     print(f"server_url={args.server_url}")
     print(f"action_mode={args.action_mode}")
     print(f"action_target={args.action_target}")
+    print(f"execute_chunk_size={args.execute_chunk_size}")
     print(f"execute={args.execute}")
 
     bot = Astribot(freq=250.0, high_control_rights=args.high_control_rights)
@@ -465,6 +475,8 @@ def main():
 
     results: List[Dict[str, Any]] = []
     dt = 1.0 / max(args.control_hz, 1e-6)
+    pending_actions: Deque[np.ndarray] = deque()
+    infer_count = 0
 
     for step in range(args.num_steps):
         loop_t0 = time.time()
@@ -472,28 +484,40 @@ def main():
         state_vec, current_raw = get_robot_state(bot)
         images = cam_history.get_history()
 
-        payload = {
-            "instruction": args.instruction,
-            "state": state_vec.astype(np.float32).tolist(),
-            "images": {
-                "cam_high": [encode_image_b64(img) for img in images["cam_high"]],
-                "cam_right_wrist": [encode_image_b64(img) for img in images["cam_right_wrist"]],
-                "cam_left_wrist": [encode_image_b64(img) for img in images["cam_left_wrist"]],
-            },
-            "action_target": args.action_target,
-            "ctrl_freq": int(args.ctrl_freq),
-        }
+        infer_latency_ms = 0.0
+        reused_cached_action = bool(pending_actions)
+        if not pending_actions:
+            payload = {
+                "instruction": args.instruction,
+                "state": state_vec.astype(np.float32).tolist(),
+                "images": {
+                    "cam_high": [encode_image_b64(img) for img in images["cam_high"]],
+                    "cam_right_wrist": [encode_image_b64(img) for img in images["cam_right_wrist"]],
+                    "cam_left_wrist": [encode_image_b64(img) for img in images["cam_left_wrist"]],
+                },
+                "action_target": args.action_target,
+                "ctrl_freq": int(args.ctrl_freq),
+            }
 
-        infer_t0 = time.time()
-        resp = post_json(f"{args.server_url}/infer", payload, timeout_sec=args.timeout_sec)
-        infer_latency_ms = float((time.time() - infer_t0) * 1000.0)
+            infer_t0 = time.time()
+            resp = post_json(f"{args.server_url}/infer", payload, timeout_sec=args.timeout_sec)
+            infer_latency_ms = float((time.time() - infer_t0) * 1000.0)
 
-        if not resp.get("ok", False):
-            raise RuntimeError(f"Server infer failed: {resp}")
+            if not resp.get("ok", False):
+                raise RuntimeError(f"Server infer failed: {resp}")
 
-        pred = np.asarray(resp["action"], dtype=np.float32)
+            pred = np.asarray(resp["action"], dtype=np.float32)
+            if pred.ndim == 1:
+                pred = pred[None, :]
+
+            use_k = min(int(args.execute_chunk_size), int(pred.shape[0]))
+            for i in range(use_k):
+                pending_actions.append(pred[i].astype(np.float32))
+            infer_count += 1
+
+        pred_to_exec = pending_actions.popleft()
         cmd = convert_action_to_robot_command(
-            pred_action=pred,
+            pred_action=pred_to_exec,
             action_mode=args.action_mode,
             action_target=args.action_target,
             active_indices=active_indices,
@@ -507,15 +531,18 @@ def main():
         loop_ms = float((time.time() - loop_t0) * 1000.0)
         record = {
             "step": step,
-            "latency_ms": float(resp.get("latency_ms", infer_latency_ms)),
+            "latency_ms": infer_latency_ms,
             "loop_ms": loop_ms,
+            "used_cached_action": reused_cached_action,
+            "pending_actions_after_step": len(pending_actions),
             "cmd": cmd,
         }
         results.append(record)
 
         print(
             f"step={step:04d} infer_latency_ms={record['latency_ms']:.2f} "
-            f"loop_ms={record['loop_ms']:.2f} execute={args.execute}"
+            f"loop_ms={record['loop_ms']:.2f} cached={record['used_cached_action']} "
+            f"pending={record['pending_actions_after_step']} execute={args.execute}"
         )
 
         sleep_t = dt - (time.time() - loop_t0)
@@ -526,6 +553,8 @@ def main():
         with open(args.output_json, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
         print(f"Saved report to {args.output_json}")
+
+    print(f"Finished steps={args.num_steps}, infer_calls={infer_count}")
 
 
 if __name__ == "__main__":

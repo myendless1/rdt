@@ -398,7 +398,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    import debugpy; debugpy.listen(("localhost", 5678)); print("Waiting for debugger attach..."); debugpy.wait_for_client()
+    # import debugpy; debugpy.listen(("localhost", 5678)); print("Waiting for debugger attach..."); debugpy.wait_for_client()
     service = RDTService(
         config_path=args.config_path,
         pretrained_model_name_or_path=args.pretrained_model_name_or_path,
