@@ -476,6 +476,7 @@ def main():
     results: List[Dict[str, Any]] = []
     dt = 1.0 / max(args.control_hz, 1e-6)
     pending_actions: Deque[np.ndarray] = deque()
+    pending_idle_steps = 0
     infer_count = 0
 
     for step in range(args.num_steps):
@@ -485,8 +486,8 @@ def main():
         images = cam_history.get_history()
 
         infer_latency_ms = 0.0
-        reused_cached_action = bool(pending_actions)
-        if not pending_actions:
+        reused_cached_action = bool(pending_actions) or (pending_idle_steps > 0)
+        if (not pending_actions) and (pending_idle_steps == 0):
             payload = {
                 "instruction": args.instruction,
                 "state": state_vec.astype(np.float32).tolist(),
@@ -511,22 +512,38 @@ def main():
                 pred = pred[None, :]
 
             use_k = min(int(args.execute_chunk_size), int(pred.shape[0]))
-            for i in range(use_k):
-                pending_actions.append(pred[i].astype(np.float32))
+            pred_chunk = pred[:use_k].astype(np.float32)
+
+            if args.action_target == "delta":
+                # Delta chunk: accumulate once, then execute a single command.
+                pending_actions.append(np.sum(pred_chunk, axis=0, dtype=np.float32))
+                pending_idle_steps = max(0, use_k - 1)
+            else:
+                # Absolute chunk: smooth with chunk mean, then execute sequentially.
+                chunk_mean = np.mean(pred_chunk, axis=0, keepdims=True, dtype=np.float32)
+                smoothed_chunk = 0.5 * pred_chunk + 0.5 * chunk_mean
+                for i in range(use_k):
+                    pending_actions.append(smoothed_chunk[i].astype(np.float32))
             infer_count += 1
 
-        pred_to_exec = pending_actions.popleft()
-        cmd = convert_action_to_robot_command(
-            pred_action=pred_to_exec,
-            action_mode=args.action_mode,
-            action_target=args.action_target,
-            active_indices=active_indices,
-            current_raw=current_raw,
-            bot=bot,
-        )
+        executed = False
+        cmd = None
+        if pending_actions:
+            pred_to_exec = pending_actions.popleft()
+            cmd = convert_action_to_robot_command(
+                pred_action=pred_to_exec,
+                action_mode=args.action_mode,
+                action_target=args.action_target,
+                active_indices=active_indices,
+                current_raw=current_raw,
+                bot=bot,
+            )
 
-        if args.execute:
-            execute_robot_command(bot, cmd, control_way=args.control_way)
+            if args.execute:
+                execute_robot_command(bot, cmd, control_way=args.control_way)
+            executed = True
+        elif pending_idle_steps > 0:
+            pending_idle_steps -= 1
 
         loop_ms = float((time.time() - loop_t0) * 1000.0)
         record = {
@@ -535,6 +552,8 @@ def main():
             "loop_ms": loop_ms,
             "used_cached_action": reused_cached_action,
             "pending_actions_after_step": len(pending_actions),
+            "pending_idle_steps_after_step": int(pending_idle_steps),
+            "executed": executed,
             "cmd": cmd,
         }
         results.append(record)
@@ -542,7 +561,9 @@ def main():
         print(
             f"step={step:04d} infer_latency_ms={record['latency_ms']:.2f} "
             f"loop_ms={record['loop_ms']:.2f} cached={record['used_cached_action']} "
-            f"pending={record['pending_actions_after_step']} execute={args.execute}"
+            f"pending={record['pending_actions_after_step']} "
+            f"idle={record['pending_idle_steps_after_step']} executed={record['executed']} "
+            f"execute={args.execute}"
         )
 
         sleep_t = dt - (time.time() - loop_t0)

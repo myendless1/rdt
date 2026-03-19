@@ -8,4 +8,4 @@ python3 scripts/eval_astribot.py \
 	--num_steps 200 \
 	--control_hz 8 \
 	--activate_camera \
-	--execute
+	--execute --execute_chunk_size 20
