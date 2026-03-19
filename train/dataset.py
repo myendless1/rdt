@@ -91,6 +91,7 @@ class VLAConsumerDataset(Dataset):
         auto_adjust_image_brightness=False,
         image_aug=False,
         dataset_type='pretrain',
+        dataset_path=None,
         dataset_stat_path="configs/dataset_stat.json",
         cond_mask_prob=0.1,
         cam_ext_mask_prob=-1.0,
@@ -179,6 +180,7 @@ class VLAConsumerDataset(Dataset):
         self.hdf5_dataset = None
         if use_hdf5:
             self.hdf5_dataset = HDF5VLADataset(
+                dataset_path=dataset_path,
                 action_mode=hdf5_action_mode,
                 action_target=hdf5_action_target,
             )

@@ -40,6 +40,14 @@ def parse_args(input_args=None):
     )
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
 
+
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        default="/media/damoxing/datasets/myendless/pick_up_board_black_bg",
+        help="Path to the training dataset. This should be a directory containing the dataset files (e.g., HDF5 files).",
+    )
+
     parser.add_argument(
         "--load_from_hdf5",
         action="store_true",

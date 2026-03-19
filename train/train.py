@@ -347,6 +347,7 @@ def train(args, logger):
         num_cameras=config["common"]["num_cameras"],
         img_history_size=config["common"]["img_history_size"],
         camera_views=selected_camera_views,
+        dataset_path=args.dataset_path,
         dataset_stat_path=args.dataset_stat_path,
         dataset_type=args.dataset_type,
         image_aug=False,

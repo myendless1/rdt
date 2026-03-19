@@ -36,10 +36,11 @@ export NCCL_NVLS_ENABLE=${NCCL_NVLS_ENABLE:-0}
 export NUM_GPUS=${NUM_GPUS:-1}
 export TEXT_ENCODER_NAME=${TEXT_ENCODER_NAME:-google/t5-v1_1-xxl}
 export VISION_ENCODER_NAME=${VISION_ENCODER_NAME:-google/siglip-so400m-patch14-384}
-export PRETRAINED_MODEL=${PRETRAINED_MODEL:-checkpoint/rdt-1b}
-export OUTPUT_DIR=${OUTPUT_DIR:-./checkpoints/rdt-finetune-astribot-1b-eef}
+export PRETRAINED_MODEL=${PRETRAINED_MODEL:-checkpoints/rdt-1b}
+export OUTPUT_DIR=${OUTPUT_DIR:-./checkpoints/rdt-1b-finetune-astribot-eef}
 export REPORT_TO=${REPORT_TO:-wandb}
 export HDF5_ACTION_MODE=${HDF5_ACTION_MODE:-eef_pose}
+export DATASET_PATH=${DATASET_PATH:-/media/damoxing/datasets/myendless/pick_up_board_black_bg}
 export DATASET_STAT_PATH=${DATASET_STAT_PATH:-configs/astribot_stats_eef_pose_delta.json}
 
 # Keep defaults practical for first run; can be overridden externally.
@@ -91,5 +92,6 @@ deepspeed --include "localhost:${TARGET_GPU}" --master_port="$MASTER_PORT" main.
   --dataset_stat_path="$DATASET_STAT_PATH" \
   --hdf5_action_mode="$HDF5_ACTION_MODE" \
   --report_to="$REPORT_TO" \
+  --dataset_path "$DATASET_PATH" \
   --log_name="rdt_finetune_astribot_eef" \
   --hdf5_action_target delta
