@@ -10,10 +10,10 @@ def get_active_indices(action_mode: str):
     same unified slots (arm_joint_0..6 for both arms + two grippers). The
     semantic meaning differs by mode.
     """
-    if action_mode not in {"delta_joint", "delta_eef_pose"}:
+    if action_mode not in {"joint", "eef_pose"}:
         raise ValueError(f"Unsupported action_mode={action_mode}")
 
-    if action_mode == "delta_joint":
+    if action_mode == "joint":
         left_arm = [STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(7)]
         right_arm = [STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(7)]
     else:

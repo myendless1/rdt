@@ -35,8 +35,8 @@ def parse_args():
     parser.add_argument(
         "--action_mode",
         type=str,
-        default="delta_eef_pose",
-        choices=["delta_joint", "delta_eef_pose"],
+        default="eef_pose",
+        choices=["joint", "eef_pose"],
         help="Action mode used to decode the dataset.",
     )
     parser.add_argument(
@@ -174,13 +174,13 @@ def build_display_labels(action_mode, active_indices):
     """Build human-readable labels for each active dimension index."""
     labels = {}
 
-    if action_mode == "delta_joint":
+    if action_mode == "joint":
         for dim_idx in active_indices:
             idx = int(dim_idx)
             labels[idx] = IDX_TO_STATE_KEY.get(idx, f"idx_{idx}")
         return labels
 
-    # delta_eef_pose is stored in unified joint slots; show semantic EEF labels.
+    # eef_pose is stored in unified EEF slots; show semantic labels.
     num_active = len(active_indices)
     if num_active < 4:
         for dim_idx in active_indices:

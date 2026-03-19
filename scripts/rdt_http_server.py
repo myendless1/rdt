@@ -135,40 +135,56 @@ class RDTService:
         ds_stat = self.dataset_stat.get(self.dataset_name, {})
         action_prefix = "absolute" if self.action_target == "absolute" else "delta"
 
-        if self.action_mode == "delta_joint":
-            state_mean_keys = ["state_mean_delta_joint", "delta_joint_state_mean", "state_mean"]
-            state_std_keys = ["state_std_delta_joint", "delta_joint_state_std", "state_std"]
+        if self.action_mode == "joint":
+            state_mean_keys = ["state_mean_joint", "joint_state_mean", "state_mean_delta_joint", "delta_joint_state_mean", "state_mean"]
+            state_std_keys = ["state_std_joint", "joint_state_std", "state_std_delta_joint", "delta_joint_state_std", "state_std"]
             action_mean_keys = [
+                f"action_mean_{action_prefix}_joint",
+                f"{action_prefix}_joint_action_mean",
                 f"action_mean_{action_prefix}_delta_joint",
                 f"{action_prefix}_delta_joint_action_mean",
                 f"action_mean_{action_prefix}",
+                "action_mean_joint",
+                "joint_action_mean",
                 "action_mean_delta_joint",
                 "delta_joint_action_mean",
                 "action_mean",
             ]
             action_std_keys = [
+                f"action_std_{action_prefix}_joint",
+                f"{action_prefix}_joint_action_std",
                 f"action_std_{action_prefix}_delta_joint",
                 f"{action_prefix}_delta_joint_action_std",
                 f"action_std_{action_prefix}",
+                "action_std_joint",
+                "joint_action_std",
                 "action_std_delta_joint",
                 "delta_joint_action_std",
                 "action_std",
             ]
         else:
-            state_mean_keys = ["state_mean_delta_eef_pose", "delta_eef_pose_state_mean", "state_mean"]
-            state_std_keys = ["state_std_delta_eef_pose", "delta_eef_pose_state_std", "state_std"]
+            state_mean_keys = ["state_mean_eef_pose", "eef_pose_state_mean", "state_mean_delta_eef_pose", "delta_eef_pose_state_mean", "state_mean"]
+            state_std_keys = ["state_std_eef_pose", "eef_pose_state_std", "state_std_delta_eef_pose", "delta_eef_pose_state_std", "state_std"]
             action_mean_keys = [
+                f"action_mean_{action_prefix}_eef_pose",
+                f"{action_prefix}_eef_pose_action_mean",
                 f"action_mean_{action_prefix}_delta_eef_pose",
                 f"{action_prefix}_delta_eef_pose_action_mean",
                 f"action_mean_{action_prefix}",
+                "action_mean_eef_pose",
+                "eef_pose_action_mean",
                 "action_mean_delta_eef_pose",
                 "delta_eef_pose_action_mean",
                 "action_mean",
             ]
             action_std_keys = [
+                f"action_std_{action_prefix}_eef_pose",
+                f"{action_prefix}_eef_pose_action_std",
                 f"action_std_{action_prefix}_delta_eef_pose",
                 f"{action_prefix}_delta_eef_pose_action_std",
                 f"action_std_{action_prefix}",
+                "action_std_eef_pose",
+                "eef_pose_action_std",
                 "action_std_delta_eef_pose",
                 "delta_eef_pose_action_std",
                 "action_std",
@@ -374,7 +390,7 @@ def parse_args():
     parser.add_argument("--pretrained_vision_encoder_name_or_path", type=str, default="google/siglip-so400m-patch14-384")
     parser.add_argument("--dataset_stat_path", type=str, default="configs/dataset_stat.json")
     parser.add_argument("--dataset_name", type=str, default="astribot")
-    parser.add_argument("--action_mode", type=str, default="delta_eef_pose", choices=["delta_joint", "delta_eef_pose"])
+    parser.add_argument("--action_mode", type=str, default="eef_pose", choices=["joint", "eef_pose"])
     parser.add_argument("--action_target", type=str, default="delta", choices=["delta", "absolute"])
     parser.add_argument("--control_frequency", type=int, default=25)
     parser.add_argument("--device", type=str, default="cuda")

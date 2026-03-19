@@ -14,7 +14,7 @@ class HDF5VLADataset:
     This class is used to sample episodes from the embododiment dataset
     stored in HDF5.
     """
-    def __init__(self, dataset_path=None, action_mode="delta_eef_pose", action_target="delta") -> None:
+    def __init__(self, dataset_path=None, action_mode="eef_pose", action_target="delta") -> None:
         # random-rack2: each HDF5 file is one episode
         HDF5_DIR = dataset_path if dataset_path is not None else "/media/damoxing/datasets/myendless/random-rack2"
         self.DATASET_NAME = "astribot"
@@ -33,10 +33,10 @@ class HDF5VLADataset:
         self.IMG_HISORY_SIZE = config['common']['img_history_size']
         self.STATE_DIM = config['common']['state_dim']
         self.action_mode = action_mode
-        if self.action_mode not in {"delta_joint", "delta_eef_pose"}:
+        if self.action_mode not in {"joint", "eef_pose"}:
             raise ValueError(
                 f"Unsupported action_mode={self.action_mode}. "
-                "Choose from {'delta_joint', 'delta_eef_pose'}."
+                "Choose from {'joint', 'eef_pose'}."
             )
         self.action_target = action_target
         if self.action_target not in {"delta", "absolute"}:
@@ -89,7 +89,7 @@ class HDF5VLADataset:
             self.episode_sample_weights = episode_lens / episode_lens.sum()
 
     def _resolve_arm_slot_indices(self, arm_dim):
-        if self.action_mode == "delta_joint":
+        if self.action_mode == "joint":
             if arm_dim > len(self.LEFT_JOINT_SLOT_INDICES):
                 raise ValueError(f"Joint arm_dim={arm_dim} exceeds configured slots")
             return (
@@ -171,7 +171,7 @@ class HDF5VLADataset:
 
     def _load_bimanual_from_hdf5(self, file_obj):
         """Load bimanual trajectories from HDF5 in the requested action mode."""
-        if self.action_mode == "delta_joint":
+        if self.action_mode == "joint":
             left_arm = file_obj['joints_dict']['joints_position_state'][:, self.ASTRIBOT_DATA_JOINT_LEFT_ARM_SLICE].astype(np.float32)
             right_arm = file_obj['joints_dict']['joints_position_state'][:, self.ASTRIBOT_DATA_JOINT_RIGHT_ARM_SLICE].astype(np.float32)
             cmd_left_arm = file_obj['joints_dict']['joints_position_command'][:, self.ASTRIBOT_DATA_JOINT_LEFT_ARM_SLICE].astype(np.float32)

@@ -39,7 +39,8 @@ export VISION_ENCODER_NAME=${VISION_ENCODER_NAME:-google/siglip-so400m-patch14-3
 export PRETRAINED_MODEL=${PRETRAINED_MODEL:-checkpoint/rdt-1b}
 export OUTPUT_DIR=${OUTPUT_DIR:-./checkpoints/rdt-finetune-astribot-1b-joint}
 export REPORT_TO=${REPORT_TO:-wandb}
-export HDF5_ACTION_MODE=${HDF5_ACTION_MODE:-delta_joint}
+export HDF5_ACTION_MODE=${HDF5_ACTION_MODE:-joint}
+export DATASET_STAT_PATH=${DATASET_STAT_PATH:-configs/dataset_stat.json}
 
 # Keep defaults practical for first run; can be overridden externally.
 export TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-8}
@@ -84,6 +85,7 @@ deepspeed --num_gpus="1" --master_port="$MASTER_PORT" main.py \
   --dataset_type="finetune" \
   --state_noise_snr=40 \
   --load_from_hdf5 \
+  --dataset_stat_path="$DATASET_STAT_PATH" \
   --hdf5_action_mode="$HDF5_ACTION_MODE" \
   --report_to="$REPORT_TO" \
   --log_name="rdt_finetune_astribot_joint" 

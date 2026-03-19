@@ -91,11 +91,12 @@ class VLAConsumerDataset(Dataset):
         auto_adjust_image_brightness=False,
         image_aug=False,
         dataset_type='pretrain',
+        dataset_stat_path="configs/dataset_stat.json",
         cond_mask_prob=0.1,
         cam_ext_mask_prob=-1.0,
         state_noise_snr=None,
         use_hdf5=False,
-        hdf5_action_mode="delta_eef_pose",
+        hdf5_action_mode="eef_pose",
         hdf5_action_target="delta",
         use_precomp_lang_embed=False
     ):
@@ -186,7 +187,7 @@ class VLAConsumerDataset(Dataset):
             self.empty_lang_embed = torch.load("data/empty_lang_embed.pt")
         
         # Load dataset stat
-        with open("configs/dataset_stat.json", 'r') as f:
+        with open(dataset_stat_path, 'r') as f:
             dataset_stat = json.load(f)
         self.dataset_stat = dataset_stat
         
@@ -307,40 +308,56 @@ class VLAConsumerDataset(Dataset):
 
         action_prefix = "absolute" if (self.use_hdf5 and self.hdf5_action_target == "absolute") else "delta"
 
-        if self.use_hdf5 and self.hdf5_action_mode == "delta_joint":
-            state_mean_keys = ["state_mean_delta_joint", "delta_joint_state_mean", "state_mean"]
-            state_std_keys = ["state_std_delta_joint", "delta_joint_state_std", "state_std"]
+        if self.use_hdf5 and self.hdf5_action_mode == "joint":
+            state_mean_keys = ["state_mean_joint", "joint_state_mean", "state_mean_delta_joint", "delta_joint_state_mean", "state_mean"]
+            state_std_keys = ["state_std_joint", "joint_state_std", "state_std_delta_joint", "delta_joint_state_std", "state_std"]
             action_mean_keys = [
+                f"action_mean_{action_prefix}_joint",
+                f"{action_prefix}_joint_action_mean",
                 f"action_mean_{action_prefix}_delta_joint",
                 f"{action_prefix}_delta_joint_action_mean",
                 f"action_mean_{action_prefix}",
+                "action_mean_joint",
+                "joint_action_mean",
                 "action_mean_delta_joint",
                 "delta_joint_action_mean",
                 "action_mean",
             ]
             action_std_keys = [
+                f"action_std_{action_prefix}_joint",
+                f"{action_prefix}_joint_action_std",
                 f"action_std_{action_prefix}_delta_joint",
                 f"{action_prefix}_delta_joint_action_std",
                 f"action_std_{action_prefix}",
+                "action_std_joint",
+                "joint_action_std",
                 "action_std_delta_joint",
                 "delta_joint_action_std",
                 "action_std",
             ]
-        elif self.use_hdf5 and self.hdf5_action_mode == "delta_eef_pose":
-            state_mean_keys = ["state_mean_delta_eef_pose", "delta_eef_pose_state_mean", "state_mean"]
-            state_std_keys = ["state_std_delta_eef_pose", "delta_eef_pose_state_std", "state_std"]
+        elif self.use_hdf5 and self.hdf5_action_mode == "eef_pose":
+            state_mean_keys = ["state_mean_eef_pose", "eef_pose_state_mean", "state_mean_delta_eef_pose", "delta_eef_pose_state_mean", "state_mean"]
+            state_std_keys = ["state_std_eef_pose", "eef_pose_state_std", "state_std_delta_eef_pose", "delta_eef_pose_state_std", "state_std"]
             action_mean_keys = [
+                f"action_mean_{action_prefix}_eef_pose",
+                f"{action_prefix}_eef_pose_action_mean",
                 f"action_mean_{action_prefix}_delta_eef_pose",
                 f"{action_prefix}_delta_eef_pose_action_mean",
                 f"action_mean_{action_prefix}",
+                "action_mean_eef_pose",
+                "eef_pose_action_mean",
                 "action_mean_delta_eef_pose",
                 "delta_eef_pose_action_mean",
                 "action_mean",
             ]
             action_std_keys = [
+                f"action_std_{action_prefix}_eef_pose",
+                f"{action_prefix}_eef_pose_action_std",
                 f"action_std_{action_prefix}_delta_eef_pose",
                 f"{action_prefix}_delta_eef_pose_action_std",
                 f"action_std_{action_prefix}",
+                "action_std_eef_pose",
+                "eef_pose_action_std",
                 "action_std_delta_eef_pose",
                 "delta_eef_pose_action_std",
                 "action_std",

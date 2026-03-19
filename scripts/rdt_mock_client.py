@@ -66,7 +66,7 @@ def parse_args():
     parser = argparse.ArgumentParser("Mock client for RDT REST server")
     parser.add_argument("--server_url", type=str, default="http://127.0.0.1:8000")
     parser.add_argument("--dataset_path", type=str, default="/media/damoxing/datasets/myendless/random-rack2")
-    parser.add_argument("--action_mode", type=str, default="delta_eef_pose", choices=["delta_joint", "delta_eef_pose"])
+    parser.add_argument("--action_mode", type=str, default="eef_pose", choices=["joint", "eef_pose"])
     parser.add_argument("--action_target", type=str, default="delta", choices=["delta", "absolute"])
     parser.add_argument("--num_samples", type=int, default=8)
     parser.add_argument("--timeout_sec", type=float, default=60.0)

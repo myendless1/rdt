@@ -53,12 +53,12 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--hdf5_action_mode",
         type=str,
-        default="delta_eef_pose",
-        choices=["delta_joint", "delta_eef_pose"],
+        default="eef_pose",
+        choices=["joint", "eef_pose"],
         help=(
             "Action mode used by HDF5 loader. "
-            "`delta_joint` uses joints_position_state/command; "
-            "`delta_eef_pose` uses poses_dict/command_poses_dict."
+            "`joint` uses joints_position_state/command; "
+            "`eef_pose` uses poses_dict/command_poses_dict."
         ),
     )
     parser.add_argument(
@@ -70,6 +70,12 @@ def parse_args(input_args=None):
             "Training action target for HDF5 loader. "
             "`delta` uses temporal delta action; `absolute` uses raw command action."
         ),
+    )
+    parser.add_argument(
+        "--dataset_stat_path",
+        type=str,
+        default="configs/dataset_stat.json",
+        help="Path to dataset normalization stats JSON used during training.",
     )
     parser.add_argument(
         "--camera_views",

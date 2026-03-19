@@ -20,9 +20,10 @@ PRETRAINED_MODEL=${PRETRAINED_MODEL:-checkpoints/rdt-finetune-astribot-1b/checkp
 TEXT_ENCODER_NAME=${TEXT_ENCODER_NAME:-google/t5-v1_1-xxl}
 VISION_ENCODER_NAME=${VISION_ENCODER_NAME:-google/siglip-so400m-patch14-384}
 NUM_SAMPLES=${NUM_SAMPLES:-100}
+DATASET_STAT_PATH=${DATASET_STAT_PATH:-configs/dataset_stat.json}
 
-SERVER_LOG=logs/rdt_server_delta_joint.log
-CLIENT_JSON=logs/rdt_eval_delta_joint.json
+SERVER_LOG=logs/rdt_server_joint.log
+CLIENT_JSON=logs/rdt_eval_joint.json
 
 python scripts/rdt_http_server.py \
   --host "$HOST" \
@@ -31,9 +32,9 @@ python scripts/rdt_http_server.py \
   --pretrained_model_name_or_path "$PRETRAINED_MODEL" \
   --pretrained_text_encoder_name_or_path "$TEXT_ENCODER_NAME" \
   --pretrained_vision_encoder_name_or_path "$VISION_ENCODER_NAME" \
-  --dataset_stat_path configs/dataset_stat.json \
+  --dataset_stat_path "$DATASET_STAT_PATH" \
   --dataset_name astribot \
-  --action_mode delta_joint \
+  --action_mode joint \
   --control_frequency 25 \
   --device cuda \
   --dtype bf16 > "$SERVER_LOG" 2>&1 &
@@ -56,7 +57,7 @@ done
 python scripts/rdt_mock_client.py \
   --server_url "http://$HOST:$PORT" \
   --dataset_path "$DATASET_PATH" \
-  --action_mode delta_joint \
+  --action_mode joint \
   --num_samples "$NUM_SAMPLES" \
   --timeout_sec 120 \
   --output_json "$CLIENT_JSON"
