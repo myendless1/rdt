@@ -1,0 +1,11 @@
+python3 scripts/eval_astribot.py \
+	--server_url http://192.168.137.1:18081 \
+	--init_hdf5 /home/xddex04/data/hdf5_output_pick_up_board_black_bg/pick_up_board_black_bg_episode_0.hdf5 \
+	--init_move_duration 3.0 \
+	--instruction "Use right arm to perform rack manipulation while keeping left-arm joints fixed." \
+	--action_mode eef_pose \
+	--action_target delta \
+	--num_steps 200 \
+	--control_hz 8 \
+	--activate_camera \
+	--execute
