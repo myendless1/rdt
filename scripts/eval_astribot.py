@@ -539,9 +539,12 @@ def main():
             pred_chunk = pred[:use_k].astype(np.float32)
 
             if args.action_target == "delta":
-                # Delta chunk: accumulate once, then execute a single command.
-                pending_actions.append(np.sum(pred_chunk, axis=0, dtype=np.float32))
-                pending_idle_steps = max(0, use_k - 1)
+                # Delta chunk: accumulate every 8 steps
+                accumulate_chunk_size = 8
+                accumulated_length = pred_chunk.shape[0] // accumulate_chunk_size
+                for i in range(accumulated_length):
+                    acc_chunk = pred_chunk[i * accumulate_chunk_size:(i + 1) * accumulate_chunk_size]
+                    pending_actions.append(np.sum(acc_chunk, axis=0, dtype=np.float32))
             else:
                 # Absolute chunk: smooth with chunk mean, then execute sequentially.
                 chunk_mean = np.mean(pred_chunk, axis=0, keepdims=True, dtype=np.float32)

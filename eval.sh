@@ -5,7 +5,7 @@ python3 scripts/eval_astribot.py \
 	--instruction "Use right arm to perform rack manipulation while keeping left-arm joints fixed." \
 	--action_mode eef_pose \
 	--action_target delta \
-	--num_steps 200 \
+	--num_steps 2000 \
 	--control_hz 8 \
 	--activate_camera \
-	--execute --execute_chunk_size 20
+	--execute --execute_chunk_size 16
