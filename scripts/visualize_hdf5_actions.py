@@ -189,7 +189,9 @@ def build_display_labels(action_mode, active_indices):
         return labels
 
     arm_dim = (num_active - 2) // 2
-    if arm_dim == 7:
+    if arm_dim == 9:
+        per_arm_names = ["eef_x", "eef_y", "eef_z", "eef_r0", "eef_r1", "eef_r2", "eef_r3", "eef_r4", "eef_r5"]
+    elif arm_dim == 7:
         per_arm_names = ["eef_x", "eef_y", "eef_z", "eef_qx", "eef_qy", "eef_qz", "eef_qw"]
     elif arm_dim == 6:
         per_arm_names = ["eef_x", "eef_y", "eef_z", "eef_r0", "eef_r1", "eef_r2"]

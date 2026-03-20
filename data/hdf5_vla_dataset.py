@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from configs.state_vec import STATE_VEC_IDX_MAPPING
+from data.rotation_6d import pose_xyzquat_to_xyzrot6d
 
 
 class HDF5VLADataset:
@@ -18,6 +19,7 @@ class HDF5VLADataset:
         # random-rack2: each HDF5 file is one episode
         HDF5_DIR = dataset_path if dataset_path is not None else "/media/damoxing/datasets/myendless/random-rack2"
         self.DATASET_NAME = "astribot"
+        print(f"Initializing {self.DATASET_NAME} dataset from {HDF5_DIR} with action_mode={action_mode} and action_target={action_target}...")
         
         self.file_paths = []
         for root, _, files in os.walk(HDF5_DIR):
@@ -181,6 +183,16 @@ class HDF5VLADataset:
             right_arm = file_obj['poses_dict']['astribot_arm_right'][:].astype(np.float32)
             cmd_left_arm = file_obj['command_poses_dict']['astribot_arm_left'][:].astype(np.float32)
             cmd_right_arm = file_obj['command_poses_dict']['astribot_arm_right'][:].astype(np.float32)
+
+            # Normalize EEF representation to xyz + 6D rotation for all downstream paths.
+            if left_arm.shape[-1] == 7:
+                left_arm = pose_xyzquat_to_xyzrot6d(left_arm)
+            if right_arm.shape[-1] == 7:
+                right_arm = pose_xyzquat_to_xyzrot6d(right_arm)
+            if cmd_left_arm.shape[-1] == 7:
+                cmd_left_arm = pose_xyzquat_to_xyzrot6d(cmd_left_arm)
+            if cmd_right_arm.shape[-1] == 7:
+                cmd_right_arm = pose_xyzquat_to_xyzrot6d(cmd_right_arm)
 
         left_gripper = file_obj['poses_dict']['astribot_gripper_left'][:].astype(np.float32)
         right_gripper = file_obj['poses_dict']['astribot_gripper_right'][:].astype(np.float32)

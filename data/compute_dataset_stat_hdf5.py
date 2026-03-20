@@ -44,24 +44,16 @@ def process_hdf5_dataset(vla_dataset):
         file_path = vla_dataset.file_paths[i]
 
         with h5py.File(file_path, 'r') as f:
-            # --- Load Raw Data ---
-            left_arm = f['poses_dict']['astribot_arm_left'][:].astype(np.float32)
-            right_arm = f['poses_dict']['astribot_arm_right'][:].astype(np.float32)
-            left_gripper = f['poses_dict']['astribot_gripper_left'][:].astype(np.float32)
-            right_gripper = f['poses_dict']['astribot_gripper_right'][:].astype(np.float32)
-
-            cmd_left_arm = f['command_poses_dict']['astribot_arm_left'][:].astype(np.float32)
-            cmd_right_arm = f['command_poses_dict']['astribot_arm_right'][:].astype(np.float32)
-            cmd_left_gripper = f['command_poses_dict']['astribot_gripper_left'][:].astype(np.float32)
-            cmd_right_gripper = f['command_poses_dict']['astribot_gripper_right'][:].astype(np.float32)
-
-            left_gripper, cmd_left_gripper = vla_dataset._normalize_gripper(left_gripper, cmd_left_gripper)
-            right_gripper, cmd_right_gripper = vla_dataset._normalize_gripper(right_gripper, cmd_right_gripper)
-
-            num_steps = min(
-                left_arm.shape[0], right_arm.shape[0], left_gripper.shape[0], right_gripper.shape[0],
-                cmd_left_arm.shape[0], cmd_right_arm.shape[0], cmd_left_gripper.shape[0], cmd_right_gripper.shape[0]
-            )
+            parsed = vla_dataset._load_bimanual_from_hdf5(f)
+            left_arm = parsed["left_arm"]
+            right_arm = parsed["right_arm"]
+            left_gripper = parsed["left_gripper"]
+            right_gripper = parsed["right_gripper"]
+            cmd_left_arm = parsed["cmd_left_arm"]
+            cmd_right_arm = parsed["cmd_right_arm"]
+            cmd_left_gripper = parsed["cmd_left_gripper"]
+            cmd_right_gripper = parsed["cmd_right_gripper"]
+            num_steps = parsed["num_steps"]
 
             full_state = vla_dataset._fill_bimanual_state(
                 left_arm[:num_steps], left_gripper[:num_steps], right_arm[:num_steps], right_gripper[:num_steps]

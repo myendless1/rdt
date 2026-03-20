@@ -16,13 +16,14 @@ export no_proxy=localhost,127.0.0.1
 HOST=${HOST:-0.0.0.0}
 PORT=${PORT:-18081}
 DATASET_PATH=${DATASET_PATH:-/media/damoxing/datasets/myendless/pick_up_board_black_bg}
-PRETRAINED_MODEL=${PRETRAINED_MODEL:-checkpoints/rdt-1b-finetune-astribot-eef/checkpoint-6500}
+PRETRAINED_MODEL=${PRETRAINED_MODEL:-checkpoints/rdt-1b-finetune-astribot-eef/checkpoint-4000}
 TEXT_ENCODER_NAME=${TEXT_ENCODER_NAME:-google/t5-v1_1-xxl}
 VISION_ENCODER_NAME=${VISION_ENCODER_NAME:-google/siglip-so400m-patch14-384}
 NUM_SAMPLES=${NUM_SAMPLES:-8}
 DATASET_STAT_PATH=${DATASET_STAT_PATH:-configs/astribot_stats_eef_pose_delta.json}
 
 
+echo "run RDT server on http://$HOST:$PORT"
 python scripts/rdt_http_server.py \
   --host "$HOST" \
   --port "$PORT" \
@@ -36,3 +37,4 @@ python scripts/rdt_http_server.py \
   --control_frequency 25 \
   --device cuda \
   --dtype bf16
+

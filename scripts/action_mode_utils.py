@@ -25,6 +25,8 @@ def get_active_indices(action_mode: str):
             STATE_VEC_IDX_MAPPING["left_eef_angle_1"],
             STATE_VEC_IDX_MAPPING["left_eef_angle_2"],
             STATE_VEC_IDX_MAPPING["left_eef_angle_3"],
+            STATE_VEC_IDX_MAPPING["left_eef_angle_4"],
+            STATE_VEC_IDX_MAPPING["left_eef_angle_5"],
         ]
         right_arm = [
             STATE_VEC_IDX_MAPPING["right_eef_pos_x"],
@@ -34,6 +36,8 @@ def get_active_indices(action_mode: str):
             STATE_VEC_IDX_MAPPING["right_eef_angle_1"],
             STATE_VEC_IDX_MAPPING["right_eef_angle_2"],
             STATE_VEC_IDX_MAPPING["right_eef_angle_3"],
+            STATE_VEC_IDX_MAPPING["right_eef_angle_4"],
+            STATE_VEC_IDX_MAPPING["right_eef_angle_5"],
         ]
     left_gripper = STATE_VEC_IDX_MAPPING["left_gripper_open"]
     right_gripper = STATE_VEC_IDX_MAPPING["right_gripper_open"]

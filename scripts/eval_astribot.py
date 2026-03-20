@@ -30,6 +30,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "astribot_sdk"))
 
 from configs.state_vec import STATE_VEC_IDX_MAPPING, STATE_VEC_LEN
 from core.astribot_api.astribot_client import Astribot
+from data.rotation_6d import pose_xyzquat_to_xyzrot6d, pose_xyzrot6d_to_xyzquat
 from scripts.action_mode_utils import get_active_indices
 
 
@@ -62,13 +63,6 @@ def gripper_open_to_joint(g_open: float) -> float:
     return float(np.clip((1.0 - g_open) * 100.0, 0.0, 100.0))
 
 
-def quat_normalize(q: np.ndarray) -> np.ndarray:
-    n = float(np.linalg.norm(q))
-    if n < 1e-8:
-        return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-    return (q / n).astype(np.float32)
-
-
 def build_state_vec(
     left_joint: List[float],
     right_joint: List[float],
@@ -89,22 +83,28 @@ def build_state_vec(
     state[STATE_VEC_IDX_MAPPING["right_gripper_open"]] = gripper_joint_to_open(right_gripper_joint)
 
     if len(left_pose_xyzquat) >= 7:
-        state[STATE_VEC_IDX_MAPPING["left_eef_pos_x"]] = left_pose_xyzquat[0]
-        state[STATE_VEC_IDX_MAPPING["left_eef_pos_y"]] = left_pose_xyzquat[1]
-        state[STATE_VEC_IDX_MAPPING["left_eef_pos_z"]] = left_pose_xyzquat[2]
-        state[STATE_VEC_IDX_MAPPING["left_eef_angle_0"]] = left_pose_xyzquat[3]
-        state[STATE_VEC_IDX_MAPPING["left_eef_angle_1"]] = left_pose_xyzquat[4]
-        state[STATE_VEC_IDX_MAPPING["left_eef_angle_2"]] = left_pose_xyzquat[5]
-        state[STATE_VEC_IDX_MAPPING["left_eef_angle_3"]] = left_pose_xyzquat[6]
+        left_pose_6d = pose_xyzquat_to_xyzrot6d(np.asarray(left_pose_xyzquat, dtype=np.float32))
+        state[STATE_VEC_IDX_MAPPING["left_eef_pos_x"]] = left_pose_6d[0]
+        state[STATE_VEC_IDX_MAPPING["left_eef_pos_y"]] = left_pose_6d[1]
+        state[STATE_VEC_IDX_MAPPING["left_eef_pos_z"]] = left_pose_6d[2]
+        state[STATE_VEC_IDX_MAPPING["left_eef_angle_0"]] = left_pose_6d[3]
+        state[STATE_VEC_IDX_MAPPING["left_eef_angle_1"]] = left_pose_6d[4]
+        state[STATE_VEC_IDX_MAPPING["left_eef_angle_2"]] = left_pose_6d[5]
+        state[STATE_VEC_IDX_MAPPING["left_eef_angle_3"]] = left_pose_6d[6]
+        state[STATE_VEC_IDX_MAPPING["left_eef_angle_4"]] = left_pose_6d[7]
+        state[STATE_VEC_IDX_MAPPING["left_eef_angle_5"]] = left_pose_6d[8]
 
     if len(right_pose_xyzquat) >= 7:
-        state[STATE_VEC_IDX_MAPPING["right_eef_pos_x"]] = right_pose_xyzquat[0]
-        state[STATE_VEC_IDX_MAPPING["right_eef_pos_y"]] = right_pose_xyzquat[1]
-        state[STATE_VEC_IDX_MAPPING["right_eef_pos_z"]] = right_pose_xyzquat[2]
-        state[STATE_VEC_IDX_MAPPING["right_eef_angle_0"]] = right_pose_xyzquat[3]
-        state[STATE_VEC_IDX_MAPPING["right_eef_angle_1"]] = right_pose_xyzquat[4]
-        state[STATE_VEC_IDX_MAPPING["right_eef_angle_2"]] = right_pose_xyzquat[5]
-        state[STATE_VEC_IDX_MAPPING["right_eef_angle_3"]] = right_pose_xyzquat[6]
+        right_pose_6d = pose_xyzquat_to_xyzrot6d(np.asarray(right_pose_xyzquat, dtype=np.float32))
+        state[STATE_VEC_IDX_MAPPING["right_eef_pos_x"]] = right_pose_6d[0]
+        state[STATE_VEC_IDX_MAPPING["right_eef_pos_y"]] = right_pose_6d[1]
+        state[STATE_VEC_IDX_MAPPING["right_eef_pos_z"]] = right_pose_6d[2]
+        state[STATE_VEC_IDX_MAPPING["right_eef_angle_0"]] = right_pose_6d[3]
+        state[STATE_VEC_IDX_MAPPING["right_eef_angle_1"]] = right_pose_6d[4]
+        state[STATE_VEC_IDX_MAPPING["right_eef_angle_2"]] = right_pose_6d[5]
+        state[STATE_VEC_IDX_MAPPING["right_eef_angle_3"]] = right_pose_6d[6]
+        state[STATE_VEC_IDX_MAPPING["right_eef_angle_4"]] = right_pose_6d[7]
+        state[STATE_VEC_IDX_MAPPING["right_eef_angle_5"]] = right_pose_6d[8]
 
     return state
 
@@ -200,8 +200,10 @@ def get_robot_state(bot: Astribot) -> Tuple[np.ndarray, Dict[str, Any]]:
         "right_joint": np.asarray(right_joint, dtype=np.float32),
         "left_gripper_open": float(gripper_joint_to_open(left_g_joint)),
         "right_gripper_open": float(gripper_joint_to_open(right_g_joint)),
-        "left_pose": np.asarray(left_pose, dtype=np.float32),
-        "right_pose": np.asarray(right_pose, dtype=np.float32),
+        "left_pose_xyzquat": np.asarray(left_pose, dtype=np.float32),
+        "right_pose_xyzquat": np.asarray(right_pose, dtype=np.float32),
+        "left_pose_xyzrot6d": pose_xyzquat_to_xyzrot6d(np.asarray(left_pose, dtype=np.float32)),
+        "right_pose_xyzrot6d": pose_xyzquat_to_xyzrot6d(np.asarray(right_pose, dtype=np.float32)),
     }
     return state_vec, raw
 
@@ -258,22 +260,44 @@ def convert_action_to_robot_command(
             },
         }
 
-    # eef_pose: [left(7), right(7), gL, gR]
-    left_pose = act[:7]
-    right_pose = act[7:14]
-    g_left = float(act[14])
-    g_right = float(act[15])
+    arm_dim = (len(active_indices) - 2) // 2
+    left_pose = act[:arm_dim]
+    right_pose = act[arm_dim:2 * arm_dim]
+    g_left = float(act[2 * arm_dim])
+    g_right = float(act[2 * arm_dim + 1])
 
     if action_target == "delta":
-        left_pose = current_raw["left_pose"] + left_pose
-        right_pose = current_raw["right_pose"] + right_pose
+        if arm_dim == 9:
+            left_pose = current_raw["left_pose_xyzrot6d"] + left_pose
+            right_pose = current_raw["right_pose_xyzrot6d"] + right_pose
+        else:
+            left_pose = current_raw["left_pose_xyzquat"] + left_pose
+            right_pose = current_raw["right_pose_xyzquat"] + right_pose
         g_left = float(current_raw["left_gripper_open"] + g_left)
         g_right = float(current_raw["right_gripper_open"] + g_right)
 
     left_pose = left_pose.astype(np.float32)
     right_pose = right_pose.astype(np.float32)
-    left_pose[3:7] = quat_normalize(left_pose[3:7])
-    right_pose[3:7] = quat_normalize(right_pose[3:7])
+
+    # Astribot cartesian command expects xyz + xyzw quaternion.
+    if arm_dim == 9:
+        left_pose = pose_xyzrot6d_to_xyzquat(left_pose)
+        right_pose = pose_xyzrot6d_to_xyzquat(right_pose)
+    elif arm_dim == 7:
+        left_q = left_pose[3:7]
+        right_q = right_pose[3:7]
+        left_q_norm = np.linalg.norm(left_q)
+        right_q_norm = np.linalg.norm(right_q)
+        if left_q_norm < 1e-8:
+            left_pose[3:7] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+        else:
+            left_pose[3:7] = left_q / left_q_norm
+        if right_q_norm < 1e-8:
+            right_pose[3:7] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+        else:
+            right_pose[3:7] = right_q / right_q_norm
+    else:
+        raise ValueError(f"Unsupported eef arm_dim={arm_dim}, expected 9 (xyz+rot6d) or 7 (xyz+quat)")
 
     g_left_joint = gripper_open_to_joint(g_left)
     g_right_joint = gripper_open_to_joint(g_right)
