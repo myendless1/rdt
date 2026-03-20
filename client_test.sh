@@ -4,4 +4,7 @@ python scripts/rdt_mock_client.py \
     --action_mode eef_pose \
     --action_target delta \
     --output_video logs/rdt_eval_full_dataset.mp4 \
-    --video_fps 20 --max_episodes 1
+    --video_fps 20 \
+    --max_episodes 1 \
+    --infer_stride 5 \
+    --max_reference_records 4

@@ -202,11 +202,15 @@ def parse_args():
     parser.add_argument("--output_json", type=str, default="logs/rdt_eval_full_dataset.json")
     parser.add_argument("--output_video", type=str, default="logs/rdt_eval_full_dataset.mp4")
     parser.add_argument("--video_fps", type=int, default=20)
+    parser.add_argument("--infer_stride", type=int, default=1, help="Inference stride in timesteps. 1 means infer every step.")
+    parser.add_argument("--max_reference_records", type=int, default=4, help="Max number of past/current inference records to aggregate for current-step prediction.")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.infer_stride <= 0:
+        raise ValueError("--infer_stride must be >= 1")
 
     ds = HDF5VLADataset(
         dataset_path=args.dataset_path,
@@ -241,7 +245,8 @@ def main():
         start = int(episode["start"])
 
         with h5py.File(file_path, "r") as h5_file:
-            infer_indices = np.arange(state.shape[0])[::5] # Infer every 5 steps to reduce latency
+            infer_indices = np.arange(state.shape[0])[::args.infer_stride]
+            all_reference_records = []
             for local_t in tqdm(infer_indices, desc=f"Episode {ep_idx + 1}/{max_episodes}", unit="step"):
                 abs_step = start + local_t
 
@@ -262,7 +267,25 @@ def main():
                     raise RuntimeError(f"Server infer failed on episode={ep_idx} step={abs_step}: {resp}")
 
                 pred = np.array(resp["action"], dtype=np.float32)
-                pred_t0 = pred[0]
+                if pred.ndim == 1:
+                    pred = pred[None, :]
+                all_reference_records.append([row.copy() for row in pred[:args.max_reference_records+1]])
+
+                # Aggregate current-step action from all past/current inference records
+                # by taking each record's first element (aligned to current timestep).
+                aligned_actions = []
+                alive_reference_records = []
+                for rec in all_reference_records:
+                    if len(rec) == 0:
+                        continue
+                    aligned_actions.append(rec.pop(0))
+                    if len(rec) > 0:
+                        alive_reference_records.append(rec)
+                all_reference_records = alive_reference_records
+
+                if len(aligned_actions) == 0:
+                    continue
+                pred_t0 = np.mean(np.stack(aligned_actions, axis=0), axis=0)
                 gt_t0 = action[local_t].astype(np.float32)
 
                 pred_all.append(pred_t0)

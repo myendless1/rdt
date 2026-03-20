@@ -451,6 +451,7 @@ def parse_args():
     parser.add_argument("--execute", action="store_true", help="执行发送给 Astribot 的控制命令")
     parser.add_argument("--control_way", type=str, default="filter", choices=["filter", "direct"])
     parser.add_argument("--output_json", type=str, default="")
+    parser.add_argument("--max_reference_records", type=int, default=4, help="Max number of past/current inference records to aggregate for current-step prediction.")
     return parser.parse_args()
 
 
@@ -497,11 +498,14 @@ def main():
     if not cam_history.ready():
         raise RuntimeError("Camera warmup timeout: failed to receive all required camera frames")
 
+
     results: List[Dict[str, Any]] = []
     dt = 1.0 / max(args.control_hz, 1e-6)
     pending_actions: Deque[np.ndarray] = deque()
     pending_idle_steps = 0
     infer_count = 0
+    # reference records for aggregation
+    all_reference_records = []
 
     for step in range(args.num_steps):
         loop_t0 = time.time()
@@ -534,20 +538,22 @@ def main():
             pred = np.asarray(resp["action"], dtype=np.float32)
             if pred.ndim == 1:
                 pred = pred[None, :]
-
-            use_k = min(int(args.execute_chunk_size), int(pred.shape[0]))
-            pred_chunk = pred[:use_k].astype(np.float32)
-
-            if args.action_target == "delta":
-                # Delta chunk: accumulate once, then execute a single command.
-                pending_actions.append(np.sum(pred_chunk, axis=0, dtype=np.float32))
-                pending_idle_steps = max(0, use_k - 1)
-            else:
-                # Absolute chunk: smooth with chunk mean, then execute sequentially.
-                chunk_mean = np.mean(pred_chunk, axis=0, keepdims=True, dtype=np.float32)
-                smoothed_chunk = 0.5 * pred_chunk + 0.5 * chunk_mean
-                for i in range(use_k):
-                    pending_actions.append(smoothed_chunk[i].astype(np.float32))
+            # reference records aggregation
+            all_reference_records.append([row.copy() for row in pred[:args.max_reference_records+1]])
+            # Aggregate current-step action from all past/current inference records
+            aligned_actions = []
+            alive_reference_records = []
+            for rec in all_reference_records:
+                if len(rec) == 0:
+                    continue
+                aligned_actions.append(rec.pop(0))
+                if len(rec) > 0:
+                    alive_reference_records.append(rec)
+            all_reference_records = alive_reference_records
+            if len(aligned_actions) == 0:
+                continue
+            pred_to_exec = np.mean(np.stack(aligned_actions, axis=0), axis=0)
+            pending_actions.append(pred_to_exec)
             infer_count += 1
 
         executed = False

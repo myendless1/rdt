@@ -6,6 +6,7 @@ python3 scripts/eval_astribot.py \
 	--action_mode eef_pose \
 	--action_target delta \
 	--num_steps 200 \
-	--control_hz 8 \
+	--control_hz 2 \
 	--activate_camera \
-	--execute --execute_chunk_size 20
+	--execute --execute_chunk_size 20 \
+	--max_reference_records 4
